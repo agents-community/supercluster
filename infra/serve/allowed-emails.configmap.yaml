@@ -1,0 +1,20 @@
+# The self-service access allowlist: emails permitted to mint their own token
+# via POST /v1/access. serve mounts this at /etc/agentplane-access/emails and
+# hot-reloads it, so you can add a tester and it takes effect within ~1 minute —
+# no redeploy.
+#
+# One email per line (commas/spaces also work). Edit + re-apply to change the set.
+#   kubectl apply -f infra/serve/allowed-emails.configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentplane-allowed-emails
+  namespace: agentplane
+data:
+  emails: |
+    dharamendra.kumar@outlook.com
+    # add your four testers below, one per line:
+    # tester1@example.com
+    # tester2@example.com
+    # tester3@example.com
+    # tester4@example.com

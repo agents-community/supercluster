@@ -127,8 +127,9 @@ type server struct {
 	client   *http.Client // outbound to atenet, trace-propagating
 	log      *slog.Logger
 	wakeHist metric.Float64Histogram // session wake/accept latency (cold-start KPI); nil when metrics off
-	vault    *vault       // credential vault (Secret Manager); nil when unconfigured
-	grantKey []byte       // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
+	vault    *vault          // credential vault (Secret Manager); nil when unconfigured
+	grantKey []byte          // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
+	emails   *emailAllowlist // self-service /v1/access: emails allowed to self-issue a token
 }
 
 func runServe(args []string) {
@@ -141,13 +142,16 @@ func runServe(args []string) {
 	shutdownMetrics, wakeHist := initMetrics(logger)
 
 	tokens := newTokenStore()
-	if tokens.file != "" { // hot-reload the token set (a mounted Secret updates ~every 60s)
-		go func() {
-			for range time.Tick(15 * time.Second) {
-				tokens.reload()
-			}
-		}()
-	}
+	emails := newEmailAllowlist()
+	// Hot-reload the token set and the email allowlist (mounted Secret/ConfigMap
+	// files refresh ~every 60s), so issue/revoke and allowlist edits take effect
+	// without a restart.
+	go func() {
+		for range time.Tick(15 * time.Second) {
+			tokens.reload()
+			emails.reload()
+		}
+	}()
 
 	// Credential vault (Secret Manager) — optional; its endpoints return 503
 	// until AGENTPLANE_PROJECT is set and the serve SA can access secrets.
@@ -168,12 +172,16 @@ func runServe(args []string) {
 		wakeHist: wakeHist,
 		vault:    v,
 		grantKey: []byte(os.Getenv("HAND_ADMIN_TOKEN")), // shared with the hand admin plane
+		emails:   emails,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	// Self-service onboarding: an allowlisted email exchanges itself for a token.
+	// Unauthenticated (it's how you get your first token); gated by the allowlist.
+	mux.HandleFunc("POST /v1/access", s.handleAccess)
 	mux.HandleFunc("GET /v1/agents", s.auth(s.handleAgentList))
 	mux.HandleFunc("POST /v1/agents", s.auth(s.handleAgentCreate))
 	mux.HandleFunc("DELETE /v1/agents/{id}", s.auth(s.handleAgentDelete))
