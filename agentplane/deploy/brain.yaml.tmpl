@@ -1,0 +1,124 @@
+# agentplane brain deployment (gate 1) — substitute ${ANTHROPIC_API_KEY} and
+# ${BUCKET_NAME}, then apply THROUGH ko (the WorkerPool ateomImage is a ko:// ref):
+#
+#   sed -e "s|\${BUCKET_NAME}|$BUCKET_NAME|g" -e "s|\${ANTHROPIC_API_KEY}|$ANTHROPIC_API_KEY|g" \
+#     deploy/brain.yaml.tmpl | (cd ../substrate && ./hack/run-tool.sh ko apply -f -)
+#
+# Carries every fix from docs/GKE.md: explicit container command (#189 Args gap),
+# the ate-api-server secret RBAC, digest-pinned images, snapshots → GCS.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentplane
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-api-key
+  namespace: agentplane
+type: Opaque
+stringData:
+  api-key: "${ANTHROPIC_API_KEY}"
+
+---
+
+# ate-api-server resolves the container's secretKeyRef env at ResumeActor time
+# (see substrate-agents-api/docs/GKE.md fix #3).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ate-api-server-env-sources
+  namespace: agentplane
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  # One entry per vendor-key secret (harnessKey defaults in internal/agentspec)
+  # + any per-agent apiKeySecret names. Missing entry = golden bake stalls in
+  # ResumeGoldenActor with "secrets ... is forbidden" in ate-api-server logs.
+  resourceNames: ["anthropic-api-key", "openai-api-key", "gemini-api-key"]
+  verbs: ["get"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ate-api-server-env-sources
+  namespace: agentplane
+subjects:
+- kind: ServiceAccount
+  name: ate-api-server
+  namespace: ate-system
+roleRef:
+  kind: Role
+  name: ate-api-server-env-sources
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: brain-pool
+  namespace: agentplane
+  labels:
+    workload: agentplane-brain
+spec:
+  replicas: 2
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+
+---
+
+# The AGENT (D3: Agent = ActorTemplate). Sessions are actors created from it
+# (named b-<session>); the golden snapshot bakes a booted-but-idle brain server,
+# so every session starts warm. AGENTPLANE_SPEC is the agent's portable config
+# (D1) — the in-image adapter translates it to harness options.
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: brain
+  namespace: agentplane
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: brain
+    # NOTE: this template ships the DEFAULT "brain" agent with the base install.
+    # Additional agents: `agentplane agent create -f <spec>.yaml` (or POST
+    # /v1/agents) — do NOT extend this file. Templates are immutable: changing
+    # the image here requires delete+recreate (safe for suspended sessions).
+    image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:fdeb84a4a820d213296b6ec5b6d5284ee60de8b6011e46b8790ac70a99e72886
+    command: ["/entrypoint.sh"]
+    env:
+    - name: PORT
+      value: "80"
+    - name: AGENTPLANE_ATESPACE
+      value: "agents"
+    - name: AGENTPLANE_HARNESS
+      value: "claude-code"
+    - name: AGENTPLANE_SPEC
+      value: '{"systemPrompt":"You are a terse, helpful agent. Answer directly.","turnDeadlineSeconds":90}'
+    - name: ANTHROPIC_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: anthropic-api-key
+          key: api-key
+    # Claude Code telemetry → the OTLP collector: token/cost metrics
+    # (claude_code.token.usage / .cost.usage) + per-LLM-call trace spans
+    # (claude_code.llm_request, via the enhanced beta). Logs OFF = no prompt
+    # content exported (privacy / BYO-key). `agent create` injects the same set
+    # when AGENTPLANE_OTEL_ENDPOINT is set (internal/agentspec).
+    - {name: CLAUDE_CODE_ENABLE_TELEMETRY, value: "1"}
+    - {name: CLAUDE_CODE_ENHANCED_TELEMETRY_BETA, value: "1"}
+    - {name: OTEL_METRICS_EXPORTER, value: "otlp"}
+    - {name: OTEL_TRACES_EXPORTER, value: "otlp"}
+    - {name: OTEL_LOGS_EXPORTER, value: "none"}
+    - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "grpc"}
+    - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317"}
+  workerSelector:
+    matchLabels:
+      workload: agentplane-brain
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/agentplane/

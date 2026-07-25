@@ -1,0 +1,51 @@
+# A PERSISTENT public HTTPS endpoint for serve, via a Cloudflare named tunnel
+# running IN the cluster — no domain purchase, no cloud load balancer, TLS
+# included, and it stays up regardless of anyone's laptop.
+#
+# Setup (one time, needs a free Cloudflare account):
+#   1. Create a tunnel + get its token (Zero Trust dashboard, or
+#      `cloudflared tunnel create agentplane` → token).
+#   2. Route it to the serve Service (in the tunnel's public-hostname config,
+#      point your chosen hostname at http://agentplane-serve.agentplane.svc:7433).
+#   3. Put the token in the Secret below and apply.
+#
+# For a throwaway URL with NO account, skip all this and run a QUICK tunnel from
+# any machine that can reach serve:
+#   cloudflared tunnel --url http://localhost:7433
+# → prints an https://<random>.trycloudflare.com URL (ephemeral).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflared-token
+  namespace: agentplane
+type: Opaque
+stringData:
+  token: "PASTE_TUNNEL_TOKEN"      # from `cloudflared tunnel token <name>`
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: agentplane
+  labels: { app: cloudflared }
+spec:
+  replicas: 2                       # HA — the tunnel survives a pod restart
+  selector:
+    matchLabels: { app: cloudflared }
+  template:
+    metadata:
+      labels: { app: cloudflared }
+    spec:
+      containers:
+      - name: cloudflared
+        image: cloudflare/cloudflared:latest
+        args: ["tunnel", "--no-autoupdate", "run", "--token", "$(TUNNEL_TOKEN)"]
+        env:
+        - name: TUNNEL_TOKEN
+          valueFrom: { secretKeyRef: { name: cloudflared-token, key: token } }
+        resources:
+          requests: { cpu: "50m", memory: "64Mi" }
+          limits: { memory: "128Mi" }
+# serve still enforces the bearer token on every /v1 route; the tunnel only adds
+# public reachability + TLS. Layer Cloudflare Access on the hostname for managed
+# identity (SSO) in front of the token.

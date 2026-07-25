@@ -1,0 +1,22 @@
+name: docs
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agentplane/docs/**"
+      - "agentplane/mkdocs.yml"
+      - "agentplane/requirements-docs.txt"
+permissions:
+  contents: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agentplane   # the agentplane galaxy owns the docs site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements-docs.txt
+      - run: mkdocs gh-deploy --force

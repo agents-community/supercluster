@@ -1,0 +1,99 @@
+// claude-code harness — a single PERSISTENT Agent SDK session per actor.
+//
+// The conversation lives in the SDK stream's process memory across turns (this
+// is what Substrate checkpoints for ~1s warm recall); the SDK also persists a
+// resumable session id, so a restarted process rejoins the exact conversation.
+
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { handURL } from "../identity.mjs";
+
+function textFromContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((b) => b.type === "text").map((b) => b.text).join("");
+}
+
+// Adapt the runtime's {text} inputs into the shape the SDK's prompt expects.
+async function* asUserMessages(inputs) {
+  for await (const inp of inputs) {
+    yield { type: "user", message: { role: "user", content: inp.text } };
+  }
+}
+
+export const claudeCode = {
+  name: "claude-code",
+
+  // AgentSpec → Agent SDK options. Pure; unit-testable in isolation.
+  optionsFromSpec(spec, resumeId, workdir) {
+    const opts = {
+      cwd: workdir,
+      permissionMode: "dontAsk",
+      // Tool policy is USER-controlled via allow/deny (the platform imposes
+      // none). Safe by default: only allow-listed tools are auto-approved,
+      // everything else is denied headless. gVisor is the safety boundary.
+      disallowedTools: [],
+      allowedTools: [],
+    };
+    if (spec.systemPrompt) opts.systemPrompt = spec.systemPrompt;
+    if (spec.model) opts.model = spec.model;
+
+    const hu = handURL(); // D3: pair the hand lazily from CURRENT identity
+    // Hand-as-gateway: when paired to a hand, the brain connects to ONE door —
+    // the hand — and the user's own MCP servers are federated THROUGH it (serve
+    // injects them into the hand, with credentials, at session create). So the
+    // brain holds no upstream URLs or credentials; every tool is mcp__hand__*.
+    // Without a hand, connect the user's servers directly from the brain.
+    const mcp = hu ? { hand: { url: hu } } : { ...(spec.mcp || {}) };
+    if (Object.keys(mcp).length > 0) {
+      opts.mcpServers = {};
+      for (const [name, cfg] of Object.entries(mcp)) {
+        opts.mcpServers[name] = { type: "http", url: cfg.url, ...(cfg.headers ? { headers: cfg.headers } : {}) };
+        opts.allowedTools.push(`mcp__${name}__*`);
+      }
+    }
+    if (Array.isArray(spec.allow)) opts.allowedTools.push(...spec.allow);
+    if (Array.isArray(spec.deny)) opts.disallowedTools.push(...spec.deny);
+    if (resumeId) opts.resume = resumeId;
+    return opts;
+  },
+
+  async *run(inputs, ctx) {
+    // BYO-key: the SDK reads ANTHROPIC_API_KEY from the environment. Setting it
+    // here (single-session actor) applies the per-session key for this turn;
+    // absent, the image's shared env key stays in effect.
+    if (ctx.apiKey) process.env.ANTHROPIC_API_KEY = ctx.apiKey;
+    const options = this.optionsFromSpec(ctx.spec, ctx.sessionId, ctx.workdir);
+    const q = query({ prompt: asUserMessages(inputs), options });
+    // The watchdog's lever: interrupting the live SDK query tears down a wedged
+    // in-flight turn (finding #1). The runtime aborts the signal on deadline.
+    const onAbort = () => { try { q.interrupt?.(); } catch { /* best-effort */ } };
+    ctx.signal.addEventListener("abort", onAbort);
+    try {
+      for await (const msg of q) {
+        if (msg.type === "system" && msg.subtype === "init") {
+          if (msg.session_id && msg.session_id !== ctx.sessionId) ctx.setSessionId(msg.session_id);
+          continue;
+        }
+        if (msg.type === "assistant") {
+          const content = msg.message?.content || [];
+          for (const block of Array.isArray(content) ? content : []) {
+            if (block.type === "tool_use") yield { type: "agent.tool_use", name: block.name, input: block.input };
+          }
+          const text = textFromContent(content);
+          if (text) yield { type: "agent.message", content: [{ type: "text", text }] };
+          continue;
+        }
+        if (msg.type === "result") {
+          yield {
+            type: "session.status_idle",
+            stop_reason: { type: msg.subtype === "success" ? "end_turn" : "error" },
+            usage: { cost_usd: msg.total_cost_usd ?? null, turns: msg.num_turns ?? null },
+          };
+          continue;
+        }
+      }
+    } finally {
+      ctx.signal.removeEventListener("abort", onAbort);
+    }
+  },
+};

@@ -1,0 +1,77 @@
+# A Google Cloud L7 HTTP(S) load balancer in front of `agentplane-serve`, via a
+# GKE Ingress. HTTPS is required (BYO-keys ride the wire) — a Google-managed
+# certificate covers a nip.io host, so NO domain purchase is needed.
+#
+# Set HOST once (from the reserved static IP):  <IP>.nip.io
+# Apply order: rbac + deployment (infra/serve) → this file. The managed cert
+# takes ~15–60 min to go ACTIVE; the LB answers 404/502 until then.
+#
+# Prereqs:
+#   gcloud compute addresses create agentplane-ip --global      # done
+#   HOST=$(gcloud compute addresses describe agentplane-ip --global --format='value(address)').nip.io
+
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+spec:
+  # The LB health-checks /healthz (serve's only unauthenticated route).
+  healthCheck:
+    type: HTTP
+    requestPath: /healthz
+    port: 7433
+  # ── Optional: Identity-Aware Proxy (Google SSO) in front of the bearer token.
+  # Uncomment after creating an OAuth client + secret (see infra/lb/README.md).
+  # iap:
+  #   enabled: true
+  #   oauthclientCredentials:
+  #     secretName: agentplane-iap-oauth
+  timeoutSec: 3600            # long, for SSE event streams
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+  labels: { app: agentplane-serve }
+  annotations:
+    cloud.google.com/backend-config: '{"default": "agentplane-serve"}'
+    cloud.google.com/neg: '{"ingress": true}'      # container-native LB
+spec:
+  type: ClusterIP
+  selector: { app: agentplane-serve }
+  ports:
+  - { name: http, port: 7433, targetPort: 7433 }
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: agentplane-cert
+  namespace: agentplane
+spec:
+  domains:
+  - "HOST"                    # replace with <static-ip>.nip.io
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentplane
+  namespace: agentplane
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "agentplane-ip"
+    networking.gke.io/managed-certificates: "agentplane-cert"
+    # Redirect http→https once the cert is ACTIVE:
+    # kubernetes.io/ingress.allow-http: "false"
+spec:
+  rules:
+  - host: "HOST"              # replace with <static-ip>.nip.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: agentplane-serve
+            port: { number: 7433 }

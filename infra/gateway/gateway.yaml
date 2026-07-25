@@ -1,0 +1,58 @@
+# Public HTTPS access point for serve, via the GKE Gateway API + a Google-managed
+# TLS certificate. Apply once you have a domain and a reserved static IP.
+#
+# Prereqs:
+#   - Gateway API enabled on the cluster (GKE: --gateway-api=standard).
+#   - A global static IP:   gcloud compute addresses create agentplane-ip --global
+#   - DNS A record: api.YOUR_DOMAIN → that IP.
+# Replace api.YOUR_DOMAIN throughout.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentplane
+  namespace: agentplane
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+  - type: NamedAddress
+    value: agentplane-ip            # the reserved global static IP
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "api.YOUR_DOMAIN"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - group: networking.gke.io
+        kind: ManagedCertificate
+        name: agentplane-cert
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: agentplane-cert
+  namespace: agentplane
+spec:
+  domains:
+  - api.YOUR_DOMAIN
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: agentplane
+  namespace: agentplane
+spec:
+  parentRefs:
+  - name: agentplane
+  hostnames:
+  - "api.YOUR_DOMAIN"
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    backendRefs:
+    - name: agentplane-serve
+      port: 7433
+# Auth is enforced by serve itself (bearer token on every /v1 route). For an
+# additional managed identity layer, front this with Cloud IAP or Cloudflare
+# Access — see infra/README.md.

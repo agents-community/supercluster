@@ -1,0 +1,22 @@
+# PodDisruptionBudget for Substrate's Valkey datastore (ate-system).
+#
+# Fixes the GKE reliability recommendation "Set Pod Disruption Budget for
+# StatefulSet". valkey-cluster runs 6 replicas as a quorum datastore; without a
+# PDB a node drain/upgrade could evict several at once and break quorum.
+# maxUnavailable:1 paces voluntary disruptions to one pod at a time.
+#
+# This is a Substrate-component overlay (not an agentplane object) — apply it
+# alongside the Substrate install. See infra/substrate-overlays/README.md for
+# the other deploy-time patches (e.g. the atenet xds.go route-timeout fix).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: valkey-cluster
+  namespace: ate-system
+  labels:
+    app.kubernetes.io/managed-by: agentplane-infra
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: valkey-cluster

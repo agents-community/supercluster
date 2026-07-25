@@ -1,0 +1,17 @@
+# A SPLIT agent: brain (reasoning) + a paired HAND (execution). No command runs
+# in the brain — the built-in exec/fs tools are DENIED, so the only shell/file
+# tools the model has are the hand's (mcp__hand__*). It routes to them on its
+# own: no "use mcp__hand__…" instruction is needed — denying the built-ins plus
+# the hand tools' own descriptions are what make the model call them.
+name: splitcoder
+harness: claude-code
+image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:b3ab43d69eefd6f2d4e28cd7ff1a36b0dd9de094c13db8669a7362f54cfab02c
+hand: true                      # → serve creates a paired h-<id> from the hand template
+systemPrompt: >-
+  You are a concise coding agent. You work in a persistent workspace and produce
+  real, tested results.
+deny: [Bash, Write, Edit, Read, Grep, Glob, NotebookEdit]   # nothing runs in the brain
+turnDeadlineSeconds: 300
+# Optional: pull a stored credential into the hand for the session (see
+# `PUT /v1/credentials/<name>`). The value never enters this spec or the brain.
+# credentials: [gh-token]

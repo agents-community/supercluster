@@ -1,0 +1,11 @@
+{
+  "name": "@agentplane/hand",
+  "version": "0.1.0",
+  "description": "agentplane hand: a durable MCP tool server (exec + filesystem) paired to a brain",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.23.8"
+  }
+}

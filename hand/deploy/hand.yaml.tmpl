@@ -1,0 +1,60 @@
+# The hand galaxy's deployment: its OWN worker pool + actor template, separate
+# from the brain's. Deploy independently of the brain.
+#
+# Substitute:
+#   ${ATEOM_IMAGE}  — the resolved ateom-gvisor image (same as the brain pool)
+#   ${HAND_IMAGE}   — gcr.io/<proj>/ate-images/agentplane-hand@sha256:…
+#   ${BUCKET_NAME}  — snapshot bucket
+---
+# A dedicated worker pool for hands — scales & is isolated independently of
+# brain-pool (hands do compute; brains hold context).
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: hand-pool
+  namespace: agentplane
+  labels:
+    workload: agentplane-hand
+spec:
+  # Headroom matters: the golden bake needs a FREE worker, and each live session
+  # pins one. Too few → "no free workers available" stalls the bake and new
+  # sessions. Scale with concurrent-session count; don't re-apply this file to a
+  # hotter pool (it would scale you back down).
+  replicas: 6
+  sandboxClass: gvisor
+  ateomImage: ${ATEOM_IMAGE}
+---
+# The hand AGENT template. Actors created from it are named h-<session> and
+# paired to a brain b-<session>. /workspace is a DurableDir — every artifact the
+# agent produces lives HERE and survives checkpoints.
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: hand
+  namespace: agentplane
+  labels:
+    agentplane.io/managed: "true"
+    agentplane.io/role: hand
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: hand
+    image: ${HAND_IMAGE}
+    command: ["/entrypoint.sh"]
+    env:
+    - {name: PORT, value: "80"}          # atenet forwards to :80
+    - {name: HAND_WORKDIR, value: "/workspace"}
+    # Gate the gateway's /admin plane (upstream + credential injection) so only
+    # serve — which holds this token — can federate MCP servers into the hand.
+    - name: HAND_ADMIN_TOKEN
+      valueFrom:
+        secretKeyRef: {name: agentplane-hand-admin, key: token}
+    volumeMounts:
+    - {name: workspace, mountPath: /workspace}
+  volumes:
+  - {name: workspace, durableDir: {}}
+  workerSelector:
+    matchLabels:
+      workload: agentplane-hand
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/agentplane/

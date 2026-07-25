@@ -1,0 +1,31 @@
+site_name: AgentPlane
+site_description: Durable agent minds on checkpointable sandboxes
+repo_url: https://github.com/REPLACE_ME/agentplane
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/brightness-7, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/brightness-4, name: Light mode }
+  features:
+    - navigation.sections
+    - content.code.copy
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - tables
+nav:
+  - Home: index.md
+  - Architecture:
+      - Brain server: brain-server.md
+      - Agents & AgentSpec: agents.md
+      - Control-plane API: api.md
+      - Observability & metrics: observability.md
+  - Operations:
+      - Reliability runbook: runbook-brain-reliability.md
+  - Contributing:
+      - Harness interface: harness-interface.md

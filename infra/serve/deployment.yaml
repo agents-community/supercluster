@@ -1,0 +1,73 @@
+# The in-cluster serve Deployment + Service. Stateless — scale freely; sessions
+# and agents are derived from Substrate, not from serve. The bearer token
+# (AGENTPLANE_TOKEN) gates every /v1 route; /healthz is open for probes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+  labels: { app: agentplane-serve }
+spec:
+  replicas: 1                      # stateless; raise once fronted by the Gateway
+  selector:
+    matchLabels: { app: agentplane-serve }
+  template:
+    metadata:
+      labels: { app: agentplane-serve }
+    spec:
+      serviceAccountName: agentplane-serve
+      containers:
+      - name: serve
+        image: gcr.io/PROJECT_ID/ate-images/agentplane-serve:latest  # set by CI / kustomize
+        ports: [{ containerPort: 7433, name: http }]
+        env:
+        # Per-user tokens: serve reads this JSON file ({"user":"token"}) from a
+        # mounted Secret and hot-reloads it. Manage with `agentplane token …`.
+        - { name: AGENTPLANE_TOKENS_FILE, value: "/etc/agentplane/tokens.json" }
+        # (optional) a single shared token for quick dev, labeled "default":
+        # - name: AGENTPLANE_TOKEN
+        #   valueFrom: { secretKeyRef: { name: agentplane-serve-token, key: token } }
+        - { name: SUBSTRATE_ATEAPI, value: "api.ate-system.svc:443" }
+        - { name: SUBSTRATE_ATENET, value: "atenet-router.ate-system.svc:80" }
+        - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
+        # Hand gateway: the shared token serve uses to inject federated MCP
+        # upstreams + credentials into a session's hand (/admin/upstreams).
+        - name: HAND_ADMIN_TOKEN
+          valueFrom: { secretKeyRef: { name: agentplane-hand-admin, key: token } }
+        # Escrow (optional — needs Workload Identity on the ServiceAccount):
+        - { name: AGENTPLANE_BUCKET, value: "" }
+        # Tracing (optional):
+        - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
+        readinessProbe:
+          httpGet: { path: /healthz, port: 7433 }
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /healthz, port: 7433 }
+          periodSeconds: 20
+        resources:
+          requests: { cpu: "100m", memory: "128Mi" }
+          limits: { memory: "512Mi" }
+        volumeMounts:
+        - { name: tokens, mountPath: /etc/agentplane, readOnly: true }
+      volumes:
+      - name: tokens
+        secret:
+          secretName: agentplane-serve-tokens
+          optional: true          # serve starts fine before any token is issued
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+  labels: { app: agentplane-serve }
+  annotations:
+    # Keep these in sync with infra/lb/ingress.yaml — without them a re-apply of
+    # this file clobbers the LB's NEG/backend binding (→ 502s until restored).
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "agentplane-serve"}'
+spec:
+  selector: { app: agentplane-serve }
+  ports:
+  - { name: http, port: 7433, targetPort: 7433 }

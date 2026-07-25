@@ -1,0 +1,35 @@
+# ── Secrets & credentials — NEVER commit ─────────────────────────────
+# Vendor API keys, signing keys, anything that authenticates.
+**/identity/
+*.pem
+*.key
+.env
+.env.*
+*.local
+auth.json
+
+# ── Go (agentplane galaxy) ───────────────────────────────────────────
+# compiled CLI binary
+/agentplane/agentplane
+/agentplane/agentplane.exe
+# serve binary staged for the image build
+/infra/serve/agentplane
+*.test
+coverage.out
+coverage.html
+dist/
+
+# ── Node (andromeda galaxy + brain image) ────────────────────────────
+node_modules/
+npm-debug.log*
+*.tgz
+
+# ── Docs tooling output ──────────────────────────────────────────────
+site/
+.venv/
+
+# ── Editor & OS noise ────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+.DS_Store

@@ -1,0 +1,39 @@
+# Least-privilege identity for the in-cluster serve.
+#
+# serve manages agents by shelling out to kubectl against ActorTemplates, and
+# talks to ateapi over gRPC (no k8s RBAC needed for that). It does NOT need
+# Secret access — BYO-keys are ephemeral (never written to Secrets), and
+# operator key config stays a CLI/`configure` task.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+  # For transcript escrow to GCS, annotate with a Workload-Identity GSA:
+  #   iam.gke.io/gcp-service-account: agentplane-serve@<project>.iam.gserviceaccount.com
+  # (grant that GSA storage.objectAdmin on the snapshot bucket). Optional —
+  # without it, escrow is skipped with a warning; all other ops work.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+rules:
+- apiGroups: ["ate.dev"]
+  resources: ["actortemplates"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentplane-serve
+  namespace: agentplane
+subjects:
+- kind: ServiceAccount
+  name: agentplane-serve
+  namespace: agentplane
+roleRef:
+  kind: Role
+  name: agentplane-serve
+  apiGroup: rbac.authorization.k8s.io

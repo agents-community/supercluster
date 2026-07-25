@@ -1,0 +1,24 @@
+# agentplane brain image, pi variant: ONLY the pi harness SDK.
+#
+# Per-harness images keep the sandbox rootfs lean — gVisor's gofer pays a
+# per-file cost at workload creation, and stacking every harness's node_modules
+# in one image pushed restores past the RPC deadline (observed with :g9).
+# The AgentSpec's `image:` field selects this variant for `harness: pi` agents;
+# the harness registry loads lazily, so absent SDKs are never imported.
+FROM node:22-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl git \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN npm install @earendil-works/pi-coding-agent@latest \
+  && npm cache clean --force
+
+COPY server.mjs runtime.mjs identity.mjs /app/
+COPY harness /app/harness
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV PORT=8080
+ENTRYPOINT ["/entrypoint.sh"]
