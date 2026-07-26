@@ -13,23 +13,23 @@ own **model API key** (used only for your session, never stored).
 ## 60-second quickstart
 
 ```bash
-# 1. Point it at the cluster + your token (ask your host for these)
-export ANDROMEDA_URL="https://YOUR-HOST"
-export ANDROMEDA_TOKEN="apl_xxxxxxxx…"          # your personal access token
+# 1. Log in once — it asks for your host's URL and your email, then saves your
+#    token to ~/.andromeda (you won't need to paste it again).
+npx @agentplane/andromeda login
 
 # 2. Bring your own model key (only the one your agent uses)
 export ANTHROPIC_API_KEY="sk-ant-…"             # or OPENAI_API_KEY / GEMINI_API_KEY
 
-# 3. Run it — no install, npx fetches it
-npx @agentplane/andromeda                       # lists agents & live sessions
-npx @agentplane/andromeda --agent migrator    # start a new conversation
+# 3. Talk to a mind — your token is remembered, nothing to paste
+npx @agentplane/andromeda --agent migrator      # start a new conversation
+npx @agentplane/andromeda                        # or list agents & live sessions
 ```
 
-That's it — no clone, no `npm install`. Type a message, hit **enter**, and watch
-the mind work.
+That's it — no clone, no `npm install`, no token juggling. `login` fetches your
+token from your email and stores it; every later run just works.
 
-> Tip: install once with `npm i -g @agentplane/andromeda` and you can just run
-> `andromeda` from anywhere instead of `npx @agentplane/andromeda`.
+> `andromeda whoami` shows who you're logged in as · `andromeda logout` clears it.
+> Prefer no install? `npm i -g @agentplane/andromeda`, then just run `andromeda`.
 
 ---
 
@@ -37,12 +37,13 @@ the mind work.
 
 | Thing | Looks like | What it's for |
 |-------|-----------|---------------|
-| **Endpoint URL** | `https://YOUR-HOST` | where the control plane lives |
-| **Access token** | `apl_…` | *your* identity — keep it private |
+| **Endpoint URL** | `https://YOUR-HOST` | where the control plane lives — you enter it at `login` |
+| **On the allowlist** | your email | so `login` can issue your token — ask your host to add it |
 | **An agent name** | e.g. `migrator` | which mind to talk to (run with no args to list) |
 
-Set the first two as `ANDROMEDA_URL` / `ANDROMEDA_TOKEN` (or pass `--url` /
-`--token` on the command line — but env vars are safer, flags show up in `ps`).
+`login` handles the token for you and saves it to `~/.andromeda`. Advanced: any
+run can be overridden with `--url` / `--token` flags or `ANDROMEDA_URL` /
+`ANDROMEDA_TOKEN` env vars — they win over the saved config.
 
 ---
 
@@ -125,7 +126,8 @@ A stateless bot would start from zero every time. This one never lost the thread
 | Symptom | Fix |
 |---------|-----|
 | `cannot reach the control plane` | check `ANDROMEDA_URL`; confirm the endpoint with your host |
-| `missing or invalid bearer token` | check `ANDROMEDA_TOKEN` — it should start with `apl_` |
+| `missing or invalid bearer token` | run `andromeda login` again (or `andromeda whoami` to check) |
+| `isn't on the allowlist` at login | ask your host to add your email, then retry `andromeda login` |
 | agent replies but does nothing useful | make sure your model key env var is `export`ed (a plain `VAR=…` won't reach the process) |
 | first message is slow | that's a sleeping mind waking from its checkpoint — it's quick after that |
 | `node: bad option` / crashes | you need Node 18.17+ (`node -v` to check) |
@@ -135,10 +137,10 @@ A stateless bot would start from zero every time. This one never lost the thread
 ## One command to remember
 
 ```bash
-ANDROMEDA_URL=https://YOUR-HOST \
-ANDROMEDA_TOKEN=apl_your_token \
+npx @agentplane/andromeda login                          # once — saves your token
+
 ANTHROPIC_API_KEY=sk-ant-your_key \
-npx @agentplane/andromeda --agent migrator
+npx @agentplane/andromeda --agent migrator               # anytime after
 ```
 
 Welcome aboard. Talk to a mind, leave, come back — it remembers. 🌌

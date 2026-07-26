@@ -41,6 +41,9 @@ export class Client {
   }
 
   health() { return this.json("GET", "/healthz"); }
+  // Self-service login: exchange an allowlisted email for a token. No auth —
+  // this is how you get your first token. Returns { user, token, reissued }.
+  access(email) { return this.json("POST", "/v1/access", { email }); }
   agents() { return this.json("GET", "/v1/agents").then((d) => d.agents ?? []); }
   sessions() { return this.json("GET", "/v1/sessions").then((d) => d.sessions ?? []); }
   // apiKey (optional) is the user's BYO vendor key — sent once over TLS, held
