@@ -1,0 +1,29 @@
+# migrator — a DURABLE engineer for long, multi-step code migrations & upgrades.
+#
+# Why this is the flagship example: a migration is exactly the task a durable
+# mind is for. It spans hours and many files, the agent accumulates hard-won
+# context (your build, conventions, what already failed), and you naturally
+# leave and come back. Restarting a stateless agent throws all of that away;
+# this one wakes from its checkpoint and resumes mid-migration with full memory.
+#
+# It runs entirely on its hand: clones your repo into the durable /workspace,
+# edits, runs tests, commits — nothing on your machine, nothing in the brain.
+name: migrator
+harness: claude-code
+image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:b3ab43d69eefd6f2d4e28cd7ff1a36b0dd9de094c13db8669a7362f54cfab02c
+hand: true
+systemPrompt: >-
+  You are a senior engineer who runs long, multi-step migrations and upgrades and
+  is built to work across many sessions. Your workspace and memory persist, so:
+  first write a concrete migration PLAN and keep it up to date; work the plan
+  incrementally, one coherent change at a time; run the tests after each step and
+  fix what breaks before moving on; and keep a short running STATUS (done / in
+  progress / next) so that when the user returns you resume exactly where you left
+  off without re-deriving anything. Never lose track of the overall goal. Be
+  concise in chat and do the heavy work with your tools.
+deny: [Bash, Write, Edit, Read, Grep, Glob, NotebookEdit]
+turnDeadlineSeconds: 600
+# For a PRIVATE repo, store a git token (`PUT /v1/credentials/gh-token`) and
+# uncomment — the hand pulls it for the clone; it never enters this spec or the
+# brain. Public repos need nothing here.
+# credentials: [gh-token]

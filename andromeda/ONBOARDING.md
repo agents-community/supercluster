@@ -22,7 +22,7 @@ export ANTHROPIC_API_KEY="sk-ant-…"             # or OPENAI_API_KEY / GEMINI_A
 
 # 3. Run it — no install, npx fetches it
 npx @agentplane/andromeda                       # lists agents & live sessions
-npx @agentplane/andromeda --agent splitcoder    # start a new conversation
+npx @agentplane/andromeda --agent migrator    # start a new conversation
 ```
 
 That's it — no clone, no `npm install`. Type a message, hit **enter**, and watch
@@ -39,7 +39,7 @@ the mind work.
 |-------|-----------|---------------|
 | **Endpoint URL** | `https://YOUR-HOST` | where the control plane lives |
 | **Access token** | `apl_…` | *your* identity — keep it private |
-| **An agent name** | e.g. `splitcoder` | which mind to talk to (run with no args to list) |
+| **An agent name** | e.g. `migrator` | which mind to talk to (run with no args to list) |
 
 Set the first two as `ANDROMEDA_URL` / `ANDROMEDA_TOKEN` (or pass `--url` /
 `--token` on the command line — but env vars are safer, flags show up in `ps`).
@@ -68,7 +68,7 @@ configured).
 **Start or resume a conversation**
 
 ```bash
-andromeda --agent splitcoder        # new mind
+andromeda --agent migrator        # new mind
 andromeda --session sess-abc123     # re-attach to one you started before
 andromeda                           # list everything, then pick
 ```
@@ -82,6 +82,25 @@ andromeda                           # list everything, then pick
 | **esc** | detach — the mind keeps its full memory; re-attach any time |
 
 When you detach, Andromeda prints the exact command to come back to that mind.
+
+---
+
+## See why "durable" matters (try this)
+
+The `migrator` agent shows the whole point — a task too big for one sitting:
+
+1. **Start it:** `npx @agentplane/andromeda --agent migrator`
+2. **Give it real work:**
+   > *"Clone `github.com/<some-repo>`, then upgrade it from `<old>` to `<new>`. Write a plan first, then start working through it — I'll check back."*
+3. Watch it clone the repo into its sandbox, write a migration plan, and begin —
+   editing files and running tests on the hand.
+4. **Walk away:** hit `esc` to detach (close your laptop, go to a meeting).
+5. **Come back later:** `andromeda --session sess-…` — it's still mid-migration,
+   remembers the plan, the repo state, what's already converted and what's next.
+   Just say *"continue."*
+
+A stateless bot would start from zero every time. This one never lost the thread
+— that's the durable mind.
 
 ---
 
@@ -119,7 +138,7 @@ When you detach, Andromeda prints the exact command to come back to that mind.
 ANDROMEDA_URL=https://YOUR-HOST \
 ANDROMEDA_TOKEN=apl_your_token \
 ANTHROPIC_API_KEY=sk-ant-your_key \
-npx @agentplane/andromeda --agent splitcoder
+npx @agentplane/andromeda --agent migrator
 ```
 
 Welcome aboard. Talk to a mind, leave, come back — it remembers. 🌌
