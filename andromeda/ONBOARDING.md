@@ -13,27 +13,23 @@ own **model API key** (used only for your session, never stored).
 ## 60-second quickstart
 
 ```bash
-# 1. Get the code
-git clone https://github.com/agents-community/andromeda.git
-cd andromeda
-npm install
-
-# 2. Point it at the cluster + your token (ask your host for these)
+# 1. Point it at the cluster + your token (ask your host for these)
 export ANDROMEDA_URL="https://YOUR-HOST"
-export ANDROMEDA_TOKEN="apl_xxxxxxxx…"        # your personal access token
+export ANDROMEDA_TOKEN="apl_xxxxxxxx…"          # your personal access token
 
-# 3. Bring your own model key (only the one your agent uses)
-export ANTHROPIC_API_KEY="sk-ant-…"           # or OPENAI_API_KEY / GEMINI_API_KEY
+# 2. Bring your own model key (only the one your agent uses)
+export ANTHROPIC_API_KEY="sk-ant-…"             # or OPENAI_API_KEY / GEMINI_API_KEY
 
-# 4. See what agents exist, then start talking
-node src/cli.mjs                              # lists agents & live sessions
-node src/cli.mjs --agent splitcoder           # start a new conversation
+# 3. Run it — no install, npx fetches it
+npx @agentplane/andromeda                       # lists agents & live sessions
+npx @agentplane/andromeda --agent splitcoder    # start a new conversation
 ```
 
-That's it — type a message, hit **enter**, and watch the mind work.
+That's it — no clone, no `npm install`. Type a message, hit **enter**, and watch
+the mind work.
 
-> Tip: `npm link` once, and you can just run `andromeda` from anywhere instead
-> of `node src/cli.mjs`.
+> Tip: install once with `npm i -g @agentplane/andromeda` and you can just run
+> `andromeda` from anywhere instead of `npx @agentplane/andromeda`.
 
 ---
 
@@ -123,7 +119,7 @@ When you detach, Andromeda prints the exact command to come back to that mind.
 ANDROMEDA_URL=https://YOUR-HOST \
 ANDROMEDA_TOKEN=apl_your_token \
 ANTHROPIC_API_KEY=sk-ant-your_key \
-node src/cli.mjs --agent splitcoder
+npx @agentplane/andromeda --agent splitcoder
 ```
 
 Welcome aboard. Talk to a mind, leave, come back — it remembers. 🌌
