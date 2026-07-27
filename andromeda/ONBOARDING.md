@@ -5,8 +5,9 @@ open a conversation, the mind does real work (runs code, edits files, calls
 tools — all in an isolated sandbox), and when you leave it *keeps its memory*.
 Come back tomorrow, re-attach, and it picks up exactly where you left off.
 
-You bring two things: an **access token** (from whoever invited you) and your
-own **model API key** (used only for your session, never stored).
+You bring your **email** (your host adds it to an allowlist) and, optionally,
+your own **model API key**. `login` turns your email into a saved token; the key
+is used only for your session, held in memory, never stored.
 
 ---
 
@@ -102,6 +103,37 @@ The `starter` agent shows the whole point — a task too big for one sitting:
 
 A stateless bot would start from zero every time. This one never lost the thread
 — that's the durable mind.
+
+---
+
+## Work with your own GitHub repo
+
+`starter` can clone, edit, and **push your repos** — the work happens on its
+sandboxed hand, and your token is pulled in *just for the task*, never in the
+model's context or your terminal.
+
+1. **Store a token once** — a fine-grained GitHub PAT scoped to the repo:
+   ```bash
+   npx @agentsupercluster/andromeda cred set gh-token
+   # prompts: host (github.com), username (x-access-token), token (your PAT)
+   ```
+2. **Point `starter` at your repo:**
+   > *"Clone github.com/me/myapp, add tests for the auth module, run them, then push a branch."*
+
+Public repos need no token — just ask it to clone. `cred ls` shows what you've
+stored; `cred rm gh-token` removes it.
+
+---
+
+## The agents you can talk to
+
+| Agent | Engine | Good for |
+|---|---|---|
+| **`starter`** | Claude (claude-code) | the full experience — runs code, git, files on its hand; **start here** |
+| `codex` | OpenAI Codex | same platform, a different agent engine |
+| `pi` | model-agnostic (pi) | one harness, any model provider |
+
+Run `andromeda` with no arguments any time to see the live list.
 
 ---
 

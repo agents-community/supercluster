@@ -4,9 +4,9 @@
 #  google → GEMINI_API_KEY; configure with `agentplane configure -provider …`).
 # Change ONLY the model line to move this agent to a different vendor.
 
-name: pi-agent
+name: pi
 harness: pi
-image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-pi@sha256:4964605eef55903584a8c78a37cd5625ac5cc7aa9a67b420d62ab506be4f7bc6
+image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-pi@sha256:5f8a7a41108aef88968608d11bd8b12f80a004dba69fd02f4ec5ae24b4fbb2f5
 
 model: anthropic/claude-haiku-4-5   # or openai/gpt-5, google/gemini-2.5-pro, …
 systemPrompt: >-

@@ -23,4 +23,4 @@ turnDeadlineSeconds: 600
 # For a PRIVATE repo, store a git token (`PUT /v1/credentials/gh-token`) and
 # uncomment — the hand pulls it for the clone; it never enters this spec or the
 # brain. Public repos need nothing here.
-# credentials: [gh-token]
+credentials: [gh-token]

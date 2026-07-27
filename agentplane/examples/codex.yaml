@@ -6,9 +6,9 @@
 # an empty `allow` compiles to read-only; any entries grant full access
 # (the gVisor actor is the real safety boundary).
 
-name: codex-coder
+name: codex
 harness: codex
-image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-codex@sha256:c890020dfc630cb4d7301ded618ec69ba052d5b3628afba58b56e2f284c3fbb3
+image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-codex@sha256:e5813bd61e863e2a128f04d95615a23a7815fe058cd155231ffe17728a56f1c8
 
 systemPrompt: >-
   You are a concise coding agent. You work in /workspace. Do what is asked,
