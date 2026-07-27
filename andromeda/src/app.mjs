@@ -43,6 +43,9 @@ const bannerLine = (text, row, offset = 0) =>
 
 const chip = (label, bg) => h(Text, { backgroundColor: bg, color: C.ink, bold: true }, ` ${label} `);
 
+// A glyph per tool so a stream of tool calls reads at a glance.
+const TOOL_ICON = { bash: "❯", write: "✎", edit: "✎", read: "◉", list: "☰", grep: "⌕", glob: "⌕", ToolSearch: "⌕" };
+
 // ── event → transcript line ──────────────────────────────────────────────────
 function eventToLine(ev, { history = false } = {}) {
   const text = ev.content?.[0]?.text ?? "";
@@ -77,10 +80,17 @@ function Line({ line }) {
       return h(Box, { flexDirection: "column", marginBottom: 1 },
         h(Box, {}, chip("andromeda", C.violet)),
         h(Box, { flexDirection: "column", paddingLeft: 1 }, ...renderMarkdown(line.text, C)));
-    case "tool":
+    case "tool": {
+      const icon = TOOL_ICON[line.text] || "⚙";
       return h(Box, {},
-        h(Text, { color: C.magenta }, `  ⚙ ${line.text}`),
+        h(Text, { color: C.magenta }, `  ${icon} `),
+        h(Text, { color: C.magenta, bold: true }, line.text),
         line.summary ? h(Text, { color: C.faint }, `  ${line.summary}`) : null);
+    }
+    case "stream": // live-typing buffer; replaced by the final markdown message
+      return h(Box, { flexDirection: "column" },
+        h(Box, {}, chip("andromeda", C.violet)),
+        h(Box, { paddingLeft: 1 }, h(Text, { color: C.text }, (line.text || "") + "▌")));
     case "error":
       return h(Box, {}, chip("!", C.red), h(Text, { color: C.red }, ` ${line.text}`));
     case "info":
@@ -159,9 +169,21 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
       await client.send(sessionId, text, (attempt) =>
         append({ kind: "info", text: `waking the mind… (attempt ${attempt})` }));
       setState("thinking");
+      let buf = "";
+      const setStream = () => setLines((ls) => {
+        const c = ls.slice();
+        if (c.length && c[c.length - 1].kind === "stream") c[c.length - 1] = { kind: "stream", text: buf };
+        else c.push({ kind: "stream", text: buf });
+        return c;
+      });
+      const clearStream = () => setLines((ls) =>
+        ls.length && ls[ls.length - 1].kind === "stream" ? ls.slice(0, -1) : ls);
       cursor.current = await client.streamTurn(sessionId, cursor.current, (ev) => {
         if (ev.type === "session.status_running" || ev.type === "user.message") return;
-        append(eventToLine(ev));
+        if (ev.type === "agent.message_delta") { buf += ev.text || ""; setStream(); return; }
+        if (ev.type === "agent.message") { clearStream(); buf = ""; append(eventToLine(ev)); return; }
+        if (ev.type === "session.status_idle") { clearStream(); buf = ""; return; }
+        append(eventToLine(ev)); // tool_use, error
       });
     } catch (e) {
       append({ kind: "error", text: e.message });

@@ -38,6 +38,15 @@ export function createRuntime({ workdir, spec, harness, identity }) {
     return ev;
   }
 
+  // Live-only fan-out: stream to current SSE viewers WITHOUT persisting to the
+  // event log or replay buffer (for transient text deltas). No id, so it never
+  // advances a client's cursor; the durable `agent.message` still lands via emit().
+  function emitLive(type, payload = {}) {
+    const ev = { type, session: identity(), ...payload };
+    const frame = `event: ${type}\ndata: ${JSON.stringify(ev)}\n\n`;
+    for (const res of sseClients) res.write(frame);
+  }
+
   // ---- turn state + input queue ----
   const queue = [];
   let wakeInput = null, failInput = null;
@@ -75,7 +84,9 @@ export function createRuntime({ workdir, spec, harness, identity }) {
 
   // Map a harness's normalized event onto the wire + manage turn-end state.
   function onHarnessEvent(ev) {
-    if (ev.type === "agent.tool_use") {
+    if (ev.type === "agent.message_delta") {
+      emitLive("agent.message_delta", { text: ev.text }); // live typing; not persisted
+    } else if (ev.type === "agent.tool_use") {
       emit("agent.tool_use", { name: ev.name, input: ev.input });
     } else if (ev.type === "agent.message") {
       emit("agent.message", { content: ev.content });
