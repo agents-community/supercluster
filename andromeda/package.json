@@ -1,6 +1,6 @@
 {
   "name": "@agentsupercluster/andromeda",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A beautiful terminal for durable agent minds on AgentPlane",
   "type": "module",
   "bin": { "andromeda": "src/cli.mjs" },

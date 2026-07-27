@@ -14,6 +14,7 @@
 import React from "react";
 import { render } from "ink";
 import readline from "node:readline";
+import { readFileSync } from "node:fs";
 import { Client } from "./api.mjs";
 import { App, historyLines } from "./app.mjs";
 import { loadConfig, saveConfig, clearConfig, configPath } from "./config.mjs";
@@ -66,7 +67,86 @@ async function runLogin() {
   }
   saveConfig({ url, token, user });
   console.log(`\n✔ logged in${user ? ` as ${user}` : ""} — saved to ${configPath}`);
-  console.log(`  next:  andromeda --agent migrator`);
+  console.log(`  next:  andromeda --agent starter`);
+  process.exit(0);
+}
+
+// ---- credential vault: store a git PAT (or any secret) for your agents ----
+async function runCred(client) {
+  const sub = process.argv[3];
+  if (sub === "ls" || sub === "list") {
+    const names = await client.listCredentials();
+    console.log(names.length ? names.join("\n") : "(no credentials)");
+    process.exit(0);
+  }
+  if (sub === "rm" || sub === "delete") {
+    const name = process.argv[4];
+    if (!name) fail("usage: andromeda cred rm <name>");
+    await client.deleteCredential(name);
+    console.log(`removed credential "${name}"`);
+    process.exit(0);
+  }
+  if (sub === "set") {
+    const name = process.argv[4] || "gh-token";
+    const type = arg("type") || "git";
+    let payload;
+    if (type === "git") {
+      const host = arg("host") || (await prompt("Git host [github.com]: ")) || "github.com";
+      const username = arg("user") || (await prompt("Username [x-access-token]: ")) || "x-access-token";
+      const value = arg("token") || (await prompt(`Token (PAT for ${host}): `));
+      if (!value) fail("no token provided");
+      payload = { type: "git", value, host, username };
+    } else if (type === "env") {
+      const varName = arg("var") || (await prompt("Env var name: "));
+      const value = arg("value") || (await prompt("Value: "));
+      if (!varName || !value) fail("need a var name and value");
+      payload = { type: "env", value, varName };
+    } else if (type === "header") {
+      const value = arg("value") || (await prompt("Header value: "));
+      if (!value) fail("no value provided");
+      payload = { type: "header", value };
+    } else {
+      fail(`unknown --type "${type}" (use git | env | header)`);
+    }
+    await client.putCredential(name, payload);
+    console.log(`✔ stored "${name}" (${type}) — reference it in an agent's  credentials: [${name}]`);
+    process.exit(0);
+  }
+  fail("usage: andromeda cred set <name> [--type git|env|header] | ls | rm <name>");
+}
+
+// ---- agents: create from a spec file, or list -----------------------------
+async function runAgent(client) {
+  const sub = process.argv[3];
+  if (sub === "ls" || sub === "list") {
+    for (const a of await client.agents()) console.log(`${a.name.padEnd(18)} ${a.harness.padEnd(12)} ${a.phase}`);
+    process.exit(0);
+  }
+  if (sub === "create") {
+    const file = arg("f") ?? arg("file");
+    if (!file) fail("usage: andromeda agent create -f <spec.yaml>");
+    let spec;
+    try { spec = readFileSync(file, "utf8"); } catch (e) { fail(`cannot read ${file}: ${e.message}`); }
+    let r;
+    try { r = await client.createAgent(spec); } catch (e) { fail(`create failed: ${e.message}`); }
+    console.log(`agent "${r.name}": ${r.note || r.phase}`);
+    console.log(`  watch it come up:  andromeda agent ls   (until phase is Ready)`);
+    process.exit(0);
+  }
+  fail("usage: andromeda agent create -f <spec.yaml> | ls");
+}
+
+// ---- sessions: list, optionally filtered by --agent -----------------------
+async function runSessions(client) {
+  const filter = arg("agent");
+  let sessions = await client.sessions();
+  if (filter) sessions = sessions.filter((s) => s.agent === filter);
+  if (!sessions.length) {
+    console.log(filter ? `(no sessions for agent "${filter}")` : "(no sessions)");
+    process.exit(0);
+  }
+  for (const s of sessions) console.log(`${s.id.padEnd(20)} ${s.agent.padEnd(18)} ${s.harness.padEnd(12)} ${s.status}`);
+  console.log(`\nattach:  andromeda --session <sess-…>`);
   process.exit(0);
 }
 
@@ -91,6 +171,9 @@ usage:
   andromeda --agent <name>       mint a new session and attach
   andromeda --session <sess-…>   re-attach to an existing mind
   andromeda                      list agents & sessions, then pick
+  andromeda sessions [--agent X] list sessions (optionally for one agent)
+  andromeda agent create -f f.yaml | agent ls
+  andromeda cred set gh-token    store a git PAT (or: cred ls | cred rm <name>)
   andromeda logout | whoami
 
 connection (flags > env > ~/.andromeda):
@@ -117,6 +200,11 @@ try {
 if (!token) {
   fail("no token — run: andromeda login   (or set ANDROMEDA_TOKEN / pass --token)");
 }
+
+// Authenticated subcommands (need the client).
+if (positional === "cred") await runCred(client);
+if (positional === "agent") await runAgent(client);
+if (positional === "sessions") await runSessions(client);
 
 let sessionId = arg("session");
 let agentName = arg("agent");

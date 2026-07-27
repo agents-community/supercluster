@@ -44,6 +44,26 @@ export class Client {
   // Self-service login: exchange an allowlisted email for a token. No auth —
   // this is how you get your first token. Returns { user, token, reissued }.
   access(email) { return this.json("POST", "/v1/access", { email }); }
+
+  // Credential vault — store a secret (e.g. a git PAT) once; an agent that
+  // lists it in `credentials:` has its hand pull it for the task. Write-only:
+  // values are never returned, only names.
+  listCredentials() { return this.json("GET", "/v1/credentials").then((d) => d.credentials ?? []); }
+  putCredential(name, payload) { return this.json("PUT", `/v1/credentials/${encodeURIComponent(name)}`, payload); }
+  deleteCredential(name) { return this.json("DELETE", `/v1/credentials/${encodeURIComponent(name)}`); }
+
+  // Agents — create one from an AgentSpec (YAML). Returns { name, phase, note }.
+  async createAgent(specYaml) {
+    const res = await fetch(this.base + "/v1/agents", {
+      method: "POST",
+      headers: this.headers({ "Content-Type": "application/yaml" }),
+      body: specYaml,
+    });
+    const text = await res.text();
+    let d; try { d = text ? JSON.parse(text) : {}; } catch { d = { raw: text }; }
+    if (!res.ok) { const e = new Error(d?.error?.message || d?.error || `HTTP ${res.status}`); e.status = res.status; throw e; }
+    return d;
+  }
   agents() { return this.json("GET", "/v1/agents").then((d) => d.agents ?? []); }
   sessions() { return this.json("GET", "/v1/sessions").then((d) => d.sessions ?? []); }
   // apiKey (optional) is the user's BYO vendor key — sent once over TLS, held

@@ -21,7 +21,7 @@ npx @agentsupercluster/andromeda login
 export ANTHROPIC_API_KEY="sk-ant-…"             # or OPENAI_API_KEY / GEMINI_API_KEY
 
 # 3. Talk to a mind — your token is remembered, nothing to paste
-npx @agentsupercluster/andromeda --agent migrator      # start a new conversation
+npx @agentsupercluster/andromeda --agent starter      # start a new conversation
 npx @agentsupercluster/andromeda                        # or list agents & live sessions
 ```
 
@@ -39,7 +39,7 @@ token from your email and stores it; every later run just works.
 |-------|-----------|---------------|
 | **Endpoint URL** | `https://YOUR-HOST` | where the control plane lives — you enter it at `login` |
 | **On the allowlist** | your email | so `login` can issue your token — ask your host to add it |
-| **An agent name** | e.g. `migrator` | which mind to talk to (run with no args to list) |
+| **An agent name** | e.g. `starter` | which mind to talk to (run with no args to list) |
 
 `login` handles the token for you and saves it to `~/.andromeda`. Advanced: any
 run can be overridden with `--url` / `--token` flags or `ANDROMEDA_URL` /
@@ -69,7 +69,7 @@ configured).
 **Start or resume a conversation**
 
 ```bash
-andromeda --agent migrator        # new mind
+andromeda --agent starter        # new mind
 andromeda --session sess-abc123     # re-attach to one you started before
 andromeda                           # list everything, then pick
 ```
@@ -88,9 +88,9 @@ When you detach, Andromeda prints the exact command to come back to that mind.
 
 ## See why "durable" matters (try this)
 
-The `migrator` agent shows the whole point — a task too big for one sitting:
+The `starter` agent shows the whole point — a task too big for one sitting:
 
-1. **Start it:** `npx @agentsupercluster/andromeda --agent migrator`
+1. **Start it:** `npx @agentsupercluster/andromeda --agent starter`
 2. **Give it real work:**
    > *"Clone `github.com/<some-repo>`, then upgrade it from `<old>` to `<new>`. Write a plan first, then start working through it — I'll check back."*
 3. Watch it clone the repo into its sandbox, write a migration plan, and begin —
@@ -140,7 +140,7 @@ A stateless bot would start from zero every time. This one never lost the thread
 npx @agentsupercluster/andromeda login                          # once — saves your token
 
 ANTHROPIC_API_KEY=sk-ant-your_key \
-npx @agentsupercluster/andromeda --agent migrator               # anytime after
+npx @agentsupercluster/andromeda --agent starter               # anytime after
 ```
 
 Welcome aboard. Talk to a mind, leave, come back — it remembers. 🌌
