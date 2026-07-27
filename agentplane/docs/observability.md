@@ -48,9 +48,21 @@ series (~2.3s, 3s bucket) while warm sends stay sub-second.
 
 The trace layers above stop at the actor boundary — they show a request
 reaching the mind, not the model call inside it. Claude Code's own OpenTelemetry
-fills that in. `claude-code` agents export (to the same collector) when
-`AGENTPLANE_OTEL_ENDPOINT` is set (the compiler injects the env; the default
-`brain` template ships it):
+fills that in. `claude-code` agents export (to the same collector) once
+telemetry injection is turned on:
+
+```bash
+# 1. point serve at the collector — the compiler reads this env at agent-create
+#    time and injects Claude Code's OTEL vars into every brain it bakes.
+kubectl -n agentplane set env deploy/agentplane-serve \
+  AGENTPLANE_OTEL_ENDPOINT=http://opentelemetry-collector.otel-system.svc:4317
+# 2. RE-CREATE existing agents so the bake picks it up (new agents get it
+#    automatically). Verify the env landed:
+kubectl -n agentplane get actortemplate <agent> \
+  -o jsonpath='{range .spec.containers[0].env[*]}{.name}{"\n"}{end}' | grep CLAUDE_CODE
+```
+
+Then each agent exports:
 
 - **Metrics** — per model and query source (`main` vs `auxiliary`):
   - `claude_code.token.usage` (by type: input / output / cacheCreation / cacheRead)
@@ -70,6 +82,39 @@ sum by (model) (rate(claude_code_token_usage_tokens_total{type="output"}[5m]))
 **Privacy:** `OTEL_LOGS_EXPORTER=none` — prompt/response *content* is NOT
 exported (only usage/timing). Do not flip logs on for BYO-key/multi-tenant
 agents without checking what the events contain.
+
+## Viewing it live (Jaeger)
+
+```bash
+kubectl -n otel-system port-forward svc/jaeger 16686:16686
+# then open http://localhost:16686
+```
+
+You'll see four services reporting: `agentplane-serve`, `atenet-router`,
+`atenet-router-envoy`, and `claude-code`. To read a turn's latency:
+
+- Pick **`claude-code`** → open a `claude_code.interaction` trace. Inside it,
+  each **`claude_code.llm_request`** span is one Anthropic API round-trip, tagged
+  `gen_ai.request.model` and its duration.
+- Pick **`agentplane-serve`** / **`atenet-router`** for the request path into the
+  mind (route/resolve + `ResumeActor` on a cold wake).
+
+**What a turn actually looks like** (verified — a short prompt on the `starter`
+agent, model `sonnet`):
+
+| span | model | ~dur |
+|---|---|---|
+| `claude_code.llm_request` (auxiliary — tool-search) | `claude-haiku-4-5` | 4.6s |
+| `claude_code.llm_request` (main answer) | `claude-sonnet-5` | 4.9s |
+| `claude_code.interaction` (whole turn) | — | ~9s |
+
+Two takeaways this surfaces: (1) the **main model resolves as expected** — the
+`sonnet` alias → `claude-sonnet-5`; (2) Claude Code makes an **auxiliary Haiku
+call** (tool-search) before the answer, so per-turn latency ≈ aux + main. The
+first turn on a cold session adds the `ResumeActor` + harness spawn on top.
+
+No cluster access for the viewer? Query the Jaeger API from any in-cluster pod:
+`curl -s 'http://jaeger.otel-system.svc:16686/api/traces?service=claude-code&limit=5&lookback=30m'`.
 
 ## Deeper breakdown (planned)
 

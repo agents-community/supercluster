@@ -7,6 +7,7 @@
 # durable /workspace; nothing on your machine, nothing in the brain.
 name: starter
 harness: claude-code
+model: sonnet   # latest Sonnet
 image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:b3ab43d69eefd6f2d4e28cd7ff1a36b0dd9de094c13db8669a7362f54cfab02c
 hand: true
 systemPrompt: >-

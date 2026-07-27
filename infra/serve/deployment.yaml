@@ -41,6 +41,9 @@ spec:
         - { name: AGENTPLANE_BUCKET, value: "" }
         # Tracing (optional):
         - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
+        # Inject Claude Code LLM telemetry into every baked agent (llm_request
+        # spans + token/cost metrics → the same collector). See docs/observability.md.
+        - { name: AGENTPLANE_OTEL_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
         readinessProbe:
           httpGet: { path: /healthz, port: 7433 }
           initialDelaySeconds: 3
