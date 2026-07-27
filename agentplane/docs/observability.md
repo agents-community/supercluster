@@ -90,12 +90,18 @@ kubectl -n otel-system port-forward svc/jaeger 16686:16686
 # then open http://localhost:16686
 ```
 
-You'll see four services reporting: `agentplane-serve`, `atenet-router`,
-`atenet-router-envoy`, and `claude-code`. To read a turn's latency:
+You'll see five services reporting: `agentplane-serve`, `atenet-router`,
+`atenet-router-envoy`, `claude-code`, and `agentplane-hand`. To read a turn's
+latency:
 
 - Pick **`claude-code`** → open a `claude_code.interaction` trace. Inside it,
   each **`claude_code.llm_request`** span is one Anthropic API round-trip, tagged
-  `gen_ai.request.model` and its duration.
+  `gen_ai.request.model` and its duration. (A span "blocked on user" is just the
+  idle wait for the next human message — not latency.)
+- Pick **`agentplane-hand`** → **`hand.tool <name>`** spans, one per tool
+  execution (bash/write/edit/grep/git/…), tagged `hand.tool` + `hand.tool.is_error`.
+  These fill the brain's "blocked on tool" window with the real hand-side work
+  (they nest under the brain's turn when traceparent is propagated).
 - Pick **`agentplane-serve`** / **`atenet-router`** for the request path into the
   mind (route/resolve + `ResumeActor` on a cold wake).
 
@@ -108,10 +114,13 @@ agent, model `sonnet`):
 | `claude_code.llm_request` (main answer) | `claude-sonnet-5` | 4.9s |
 | `claude_code.interaction` (whole turn) | — | ~9s |
 
-Two takeaways this surfaces: (1) the **main model resolves as expected** — the
+Three takeaways this surfaces: (1) the **main model resolves as expected** — the
 `sonnet` alias → `claude-sonnet-5`; (2) Claude Code makes an **auxiliary Haiku
-call** (tool-search) before the answer, so per-turn latency ≈ aux + main. The
-first turn on a cold session adds the `ResumeActor` + harness spawn on top.
+call + repeated `ToolSearch`** before the answer (it discovers the hand's MCP
+tools lazily), which dominates per-turn latency; (3) the **hand's own execution
+is ~0–20ms** (`hand.tool` spans) — so latency is the LLM/ToolSearch, *not* the
+hand or the cluster. The first turn on a cold session adds `ResumeActor` +
+harness spawn on top.
 
 No cluster access for the viewer? Query the Jaeger API from any in-cluster pod:
 `curl -s 'http://jaeger.otel-system.svc:16686/api/traces?service=claude-code&limit=5&lookback=30m'`.
