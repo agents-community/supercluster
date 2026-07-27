@@ -5,9 +5,9 @@ CLI agent — except detaching never loses the conversation: the mind
 checkpoints, sleeps for ~free, and wakes with full memory when you return.
 
 ```bash
-npx @agentplane/andromeda --agent buddy        # new mind, start chatting
-npx @agentplane/andromeda --session sess-…     # come back tomorrow — it remembers
-npx @agentplane/andromeda                      # see what agents/sessions exist
+npx @agentsupercluster/andromeda --agent buddy        # new mind, start chatting
+npx @agentsupercluster/andromeda --session sess-…     # come back tomorrow — it remembers
+npx @agentsupercluster/andromeda                      # see what agents/sessions exist
 ```
 
 ## Connecting

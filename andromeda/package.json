@@ -1,5 +1,5 @@
 {
-  "name": "@agentplane/andromeda",
+  "name": "@agentsupercluster/andromeda",
   "version": "0.1.0",
   "description": "A beautiful terminal for durable agent minds on AgentPlane",
   "type": "module",

@@ -15,21 +15,21 @@ own **model API key** (used only for your session, never stored).
 ```bash
 # 1. Log in once — it asks for your host's URL and your email, then saves your
 #    token to ~/.andromeda (you won't need to paste it again).
-npx @agentplane/andromeda login
+npx @agentsupercluster/andromeda login
 
 # 2. Bring your own model key (only the one your agent uses)
 export ANTHROPIC_API_KEY="sk-ant-…"             # or OPENAI_API_KEY / GEMINI_API_KEY
 
 # 3. Talk to a mind — your token is remembered, nothing to paste
-npx @agentplane/andromeda --agent migrator      # start a new conversation
-npx @agentplane/andromeda                        # or list agents & live sessions
+npx @agentsupercluster/andromeda --agent migrator      # start a new conversation
+npx @agentsupercluster/andromeda                        # or list agents & live sessions
 ```
 
 That's it — no clone, no `npm install`, no token juggling. `login` fetches your
 token from your email and stores it; every later run just works.
 
 > `andromeda whoami` shows who you're logged in as · `andromeda logout` clears it.
-> Prefer no install? `npm i -g @agentplane/andromeda`, then just run `andromeda`.
+> Prefer no install? `npm i -g @agentsupercluster/andromeda`, then just run `andromeda`.
 
 ---
 
@@ -90,7 +90,7 @@ When you detach, Andromeda prints the exact command to come back to that mind.
 
 The `migrator` agent shows the whole point — a task too big for one sitting:
 
-1. **Start it:** `npx @agentplane/andromeda --agent migrator`
+1. **Start it:** `npx @agentsupercluster/andromeda --agent migrator`
 2. **Give it real work:**
    > *"Clone `github.com/<some-repo>`, then upgrade it from `<old>` to `<new>`. Write a plan first, then start working through it — I'll check back."*
 3. Watch it clone the repo into its sandbox, write a migration plan, and begin —
@@ -137,10 +137,10 @@ A stateless bot would start from zero every time. This one never lost the thread
 ## One command to remember
 
 ```bash
-npx @agentplane/andromeda login                          # once — saves your token
+npx @agentsupercluster/andromeda login                          # once — saves your token
 
 ANTHROPIC_API_KEY=sk-ant-your_key \
-npx @agentplane/andromeda --agent migrator               # anytime after
+npx @agentsupercluster/andromeda --agent migrator               # anytime after
 ```
 
 Welcome aboard. Talk to a mind, leave, come back — it remembers. 🌌
