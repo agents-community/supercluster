@@ -40,33 +40,37 @@ are its stars.
 
 | Galaxy | What it is | Stack |
 |---|---|---|
-| **[`agentplane/`](agentplane/)** | The control plane + runtime — agents, sessions, the durable-mind engine, and the HTTP API. | Go control plane · Node brain image · [Agent Substrate](https://github.com/agent-substrate/substrate) |
-| **[`andromeda/`](andromeda/)** | The terminal you actually live in — a beautiful TUI for chatting with durable minds. | TypeScript-less Ink (zero-build, `npx`-runnable) |
+| **[`agentplane/`](agentplane/)** | The control plane + runtime — agents, sessions, the durable-mind engine, credential vault, self-service access, and the HTTP API. | Go control plane · Node brain image · [Agent Substrate](https://github.com/agent-substrate/substrate) |
+| **[`andromeda/`](andromeda/)** | The terminal you actually live in — a rich TUI (markdown, streaming, syntax highlighting) for chatting with durable minds. | Ink, zero-build — `npx @agentsupercluster/andromeda` |
+| **[`hand/`](hand/)** | The agent's hand — an MCP tool gateway in the sandbox: bash/file tools + federation of the user's own MCP servers. The brain talks to one door. | Node · MCP streamable HTTP |
+| **[`egress/`](egress/)** | The AgentGateway — secretless egress: credentials injected at the proxy, never inside the sandbox. | mitmproxy proof → Substrate atunnel |
+| **[`infra/`](infra/)** | Deploy manifests, LB/tunnel, Terraform, and versioned [Substrate patches](infra/substrate-patches/). | k8s · GCP |
 
-More galaxies will join (infra-per-provider, a web console, …). They never
-share code across language boundaries — the contract between them is the
-**session-events HTTP dialect** ([`agentplane/docs/api.md`](agentplane/docs/api.md)).
+Galaxies never share code across language boundaries — the contract between
+them is the **HTTP API** ([`agentplane/docs/api.md`](agentplane/docs/api.md)).
+Testing spans three layers — see [`test/`](test/).
 
 ## 🚀 Quickstart
 
+**As a user** (someone is already hosting; your email is allowlisted):
 ```bash
-# 1. control plane (needs an Agent Substrate cluster — see agentplane/docs)
-cd agentplane && go build -o /tmp/agentplane ./cmd/agentplane
-/tmp/agentplane serve                       # the HTTP control plane
-
-# 2. define a durable agent
-/tmp/agentplane agent create -f examples/tutor.yaml
-
-# 3. live in it
-cd ../andromeda && npm install
-ANDROMEDA_URL=http://localhost:7433 ANDROMEDA_TOKEN=… node src/cli.mjs --agent tutor
+npx @agentsupercluster/andromeda login        # email → personal token, saved
+npx @agentsupercluster/andromeda --agent starter
 #   … chat … Ctrl+S to sleep the mind … Esc to detach …
-node src/cli.mjs --session sess-…           # tomorrow: it remembers
+npx @agentsupercluster/andromeda              # tomorrow: pick the session up — it remembers
+```
+Full walkthrough: [`andromeda/ONBOARDING.md`](andromeda/ONBOARDING.md).
+
+**As an operator** (needs an Agent Substrate cluster — see `agentplane/docs`):
+```bash
+cd agentplane && go build -o /tmp/agentplane ./cmd/agentplane
+/tmp/agentplane serve                          # the HTTP control plane
+/tmp/agentplane agent create -f examples/starter.yaml   # or codex.yaml / pi.yaml
 ```
 
 Bring your own key (nothing stored):
 ```bash
-ANDROMEDA_API_KEY=sk-… node src/cli.mjs --agent tutor
+ANDROMEDA_API_KEY=sk-… npx @agentsupercluster/andromeda --agent starter
 ```
 
 ## 🧭 Concepts in one breath
@@ -78,15 +82,19 @@ ANDROMEDA_API_KEY=sk-… node src/cli.mjs --agent tutor
 
 ## 🔭 Status & roadmap
 
-Alpha — the runtime, three harnesses, durable-workspace, tracing, and the HTTP
-API are live-verified; see [`agentplane/docs/`](agentplane/docs/) and the
-reliability runbook. Planned: per-provider infrastructure (Terraform) and CI/CD
-per galaxy, a hosted access point, and a web console.
+Alpha — the runtime, three harnesses, durable workspace, hand tool gateway,
+credential vault + self-service access, streaming TUI, and end-to-end tracing
+are **live-verified**; the secretless egress proof passes
+([`egress/`](egress/)). See [`agentplane/docs/`](agentplane/docs/) and the
+reliability runbook. Next: the egress gateway deployed in-path on Substrate
+(atunnel), then per-user credential selection via ActorIdentity.
 
 ## 🤝 Contributing
 
-Start with [`agentplane/CONTRIBUTING.md`](agentplane/CONTRIBUTING.md) — repo
-layout, the durable-mind design principles, and how to add a harness.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first — the workflow is
+**issue-first, one feature per PR**. Then
+[`agentplane/CONTRIBUTING.md`](agentplane/CONTRIBUTING.md) for repo layout,
+the durable-mind design principles, and how to add a harness.
 
 <div align="center">
 <sub>built on <a href="https://github.com/agent-substrate/substrate">Agent Substrate</a> · minds that persist</sub>

@@ -14,18 +14,26 @@ agentplane serve -addr :7433
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/healthz` | liveness (unauthenticated) |
+| POST | `/v1/access` | self-service token: `{"email":"you@…"}` → token if the email is allowlisted (unauthenticated; idempotent per email) |
 | GET | `/v1/agents` | agents + phase + live session counts |
 | POST | `/v1/agents` | body = AgentSpec (YAML/JSON) → `202`; poll GET until `Ready` (~30s golden bake) |
 | DELETE | `/v1/agents/{id}` | `409` + session list if sessions live; `?cascade=true` escrows + removes them first |
 | POST | `/v1/sessions` | `{"agent":"brain"}` → `201 {"id","agent","harness"}`; optional `"apiKey"` = BYO-key |
 | PUT | `/v1/sessions/{id}/key` | set/replace the session's ephemeral BYO vendor key |
-| GET | `/v1/sessions` | derived status: `sleeping / idle / running / unreachable` |
+| GET | `/v1/sessions` | derived status: `sleeping / idle / running / unreachable`; `?agent=` filters |
 | GET | `/v1/sessions/{id}` | session object; adds `busy/queued/last_event_at` when awake |
 | DELETE | `/v1/sessions/{id}` | cascade: escrow → delete actor → remove snapshots |
 | POST | `/v1/sessions/{id}/suspend` | checkpoint in place; `409` mid-turn unless `?force=true` |
-| POST | `/v1/sessions/{id}/events` | send a message (auto-wakes; retries 5xx wake races) |
-| GET | `/v1/sessions/{id}/events` | persisted log, `?since=evt_…` cursor |
-| GET | `/v1/sessions/{id}/events/stream` | SSE; honors `Last-Event-ID` on reconnect |
+| POST | `/v1/sessions/{id}/message` | send a message (auto-wakes; retries 5xx wake races) |
+| GET | `/v1/sessions/{id}/message` | persisted log, `?since=evt_…` cursor |
+| GET | `/v1/sessions/{id}/message/stream` | SSE; honors `Last-Event-ID` on reconnect; includes live `agent.message_delta` typing events |
+| PUT | `/v1/credentials/{name}` | store a credential in the vault (Secret Manager), scoped to the calling user |
+| GET | `/v1/credentials` | list the caller's credential names (values never returned) |
+| DELETE | `/v1/credentials/{name}` | remove a credential |
+| GET | `/v1/hand/credentials/{name}` | **internal** — hand pulls a granted credential with a short-lived HMAC grant, not a user token |
+
+The `…/events` forms of the three message routes still work as **deprecated
+aliases** for older clients.
 
 ### Errors
 
@@ -41,10 +49,37 @@ gRPC detail is logged server-side, never returned:
 (502), `timeout` (504). The 409 from `DELETE /v1/agents/{id}` additionally
 carries a `sessions` array of the stranded session ids.
 
-Bodies are capped at 1 MiB. If `AGENTPLANE_TOKEN` is set, all `/v1/*` routes
-require `Authorization: Bearer <token>` (compared in constant time). Agent and
-session ids are strictly validated before use — a flag-shaped name like
-`--all` is rejected with `400 invalid_request`, never passed to a shell.
+Bodies are capped at 1 MiB. Agent and session ids are strictly validated
+before use — a flag-shaped name like `--all` is rejected with
+`400 invalid_request`, never passed to a shell.
+
+## Authentication & self-service access
+
+When token auth is enabled, every `/v1/*` route (except `/v1/access`) requires
+`Authorization: Bearer <token>`, and each token maps to a **user identity** —
+sessions and vault credentials are owned by that user.
+
+Tokens are self-service: `POST /v1/access {"email":"you@corp.com"}` returns
+the caller's personal token **iff the email is on the operator's allowlist**
+(a hot-reloaded file set via `AGENTPLANE_ALLOWED_EMAILS_FILE`; `#` comments
+supported). The call is idempotent — the same email always gets the same
+token. Non-allowlisted emails get `403`; if no allowlist is configured the
+endpoint answers `503` and access is operator-managed.
+
+## Credential vault → the hand
+
+Users store third-party credentials (e.g. a GitHub PAT) with
+`PUT /v1/credentials/gh-token {"value":"ghp_…"}`; values land in GCP Secret
+Manager, named per user, and are never returned by the API. When a session's
+agent declares `credentials: [gh-token]`, serve mints a short-lived HMAC
+**grant** for the session's hand, and the hand redeems it against
+`GET /v1/hand/credentials/{name}` — pulling the secret straight into actor
+memory (git credentials / env / header form). User tokens cannot call the
+hand-pull route, and grants cannot call anything else.
+
+> The egress-gateway work (`egress/`) supersedes this hand-pull path: the goal
+> state injects credentials at the egress proxy so the sandbox never holds
+> them at all.
 
 !!! note "Status probing never wakes a sleeping mind"
     List/get derive `sleeping` from the actor state alone — `/healthz` probes

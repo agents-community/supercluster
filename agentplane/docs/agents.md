@@ -53,6 +53,25 @@ entire control. Only allow-listed tools are auto-approved; headless, anything
 else is denied at the permission layer, so an empty `allow` means a chat-only
 agent. The safety boundary is the gVisor sandbox, not tool lists.
 
+## Split agents: brain + hand
+
+```yaml
+hand: true                    # split the agent: reasoning ≠ execution
+credentials: [gh-token]       # vault credentials granted to the session's hand
+```
+
+With `hand: true` the agent is minted as **two** paired actors: the **brain**
+(the harness, which reasons but executes nothing) and the **[hand](../../hand/)**
+(an MCP tool gateway that owns bash/file tools and federates the user's MCP
+servers). The brain's tool traffic all flows through the hand's one MCP door —
+so tool execution is observable, credential use is attributable, and the
+reasoning process never holds secrets. `credentials:` names entries from the
+user's vault (`PUT /v1/credentials/{name}`) that serve grants to the hand at
+session setup. Hand-role agents are hidden from `GET /v1/agents`.
+
+Curated starting points live in [`examples/`](../examples/): `starter.yaml`
+(claude-code, split-agent, git-capable), `codex.yaml`, `pi.yaml`.
+
 ## Durable workspace
 
 ```yaml
