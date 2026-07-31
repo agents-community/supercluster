@@ -1,0 +1,56 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Go control plane, built against the pinned+patched Substrate checkout.
+  # This job IS the patch process check: if a patch stops applying on
+  # BASE_COMMIT or the protos drift, CI fails instead of rotting silently.
+  go-substrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: supercluster }
+      - name: Clone Substrate at BASE_COMMIT and apply our patches
+        run: |
+          BASE=$(cat supercluster/infra/substrate-patches/BASE_COMMIT)
+          git init substrate && cd substrate
+          git remote add origin https://github.com/agent-substrate/substrate.git
+          git fetch --depth 1 origin "$BASE"
+          git checkout FETCH_HEAD
+          for p in ../supercluster/infra/substrate-patches/0*.patch; do
+            echo "applying $(basename "$p")"; git apply "$p"
+          done
+      - uses: actions/setup-go@v5
+        with: { go-version-file: supercluster/agentplane/go.mod }
+      - name: Patched atenet still compiles
+        working-directory: substrate
+        run: go build ./cmd/atenet/...
+      - name: Build + unit tests
+        working-directory: supercluster/agentplane
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+
+  # The hand's MCP gateway, driven over streamable HTTP exactly like the
+  # brain drives it (initialize -> tools/list -> tools/call).
+  hand-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }   # matches hand/Dockerfile FROM node:22-slim
+      - working-directory: hand
+        run: |
+          npm ci
+          node test/mcp-smoke.mjs
+
+  # Secretless egress: proxy injects the credential, sandbox holds nothing.
+  egress-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./egress/proof/run.sh
