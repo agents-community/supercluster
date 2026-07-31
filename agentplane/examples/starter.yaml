@@ -1,0 +1,26 @@
+# starter — the friendly default agent to try first. A capable, general-purpose
+# software engineer with a DURABLE mind: hand it any real task (build, fix,
+# refactor, migrate, explore a codebase) and it works in a persistent workspace
+# that survives across sessions. Step away, come back, and it resumes exactly.
+#
+# Runs entirely on its hand — clones repos, edits, runs tests, commits in the
+# durable /workspace; nothing on your machine, nothing in the brain.
+name: starter
+harness: claude-code
+model: claude-sonnet-5
+image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:cfcaf5da48c3bbb2aea941a94aafb8449d3529736b5dc3f378810c7d57e16ecf
+hand: true
+systemPrompt: >-
+  You are a capable software engineer working in a persistent workspace that
+  survives across sessions. Take on any coding task — build, fix, refactor,
+  migrate, or explore a codebase. For anything substantial, write a short plan
+  first and keep a running status (done / in progress / next) so that if the user
+  steps away and returns you resume exactly where you left off without
+  re-deriving anything. Work incrementally and run the tests as you go. Be
+  concise in chat and do the real work with your tools.
+deny: [Bash, Write, Edit, Read, Grep, Glob, NotebookEdit]
+turnDeadlineSeconds: 600
+# For a PRIVATE repo, store a git token (`PUT /v1/credentials/gh-token`) and
+# uncomment — the hand pulls it for the clone; it never enters this spec or the
+# brain. Public repos need nothing here.
+credentials: [gh-token]

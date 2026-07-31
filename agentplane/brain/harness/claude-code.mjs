@@ -28,6 +28,7 @@ export const claudeCode = {
     const opts = {
       cwd: workdir,
       permissionMode: "dontAsk",
+      includePartialMessages: true, // stream text deltas for a live-typing UI
       // Tool policy is USER-controlled via allow/deny (the platform imposes
       // none). Safe by default: only allow-listed tools are auto-approved,
       // everything else is denied headless. gVisor is the safety boundary.
@@ -72,6 +73,16 @@ export const claudeCode = {
       for await (const msg of q) {
         if (msg.type === "system" && msg.subtype === "init") {
           if (msg.session_id && msg.session_id !== ctx.sessionId) ctx.setSessionId(msg.session_id);
+          continue;
+        }
+        // Live text deltas (includePartialMessages). Ephemeral — the runtime
+        // streams these to viewers but does NOT persist them; the complete
+        // `assistant` message below is the durable one.
+        if (msg.type === "stream_event") {
+          const e = msg.event;
+          if (e?.type === "content_block_delta" && e.delta?.type === "text_delta" && e.delta.text) {
+            yield { type: "agent.message_delta", text: e.delta.text };
+          }
           continue;
         }
         if (msg.type === "assistant") {

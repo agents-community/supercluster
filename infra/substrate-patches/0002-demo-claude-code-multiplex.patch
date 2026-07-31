@@ -1,0 +1,70 @@
+diff --git a/demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl b/demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl
+index eb06f28..0fb5aa5 100644
+--- a/demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl
++++ b/demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl
+@@ -39,6 +39,41 @@ stringData:
+ 
+ ---
+ 
++# LOCAL FIX (upstream-PR candidate): the ate-api-server resolves the containers'
++# `valueFrom.secretKeyRef` env at ResumeActor time, so it needs `get` on the
++# Secret in THIS namespace — without it, golden builds fail with
++#   secrets "anthropic-api-key" is forbidden: User
++#   "system:serviceaccount:ate-system:ate-api-server" cannot get resource "secrets"
++# Pattern copied from demos/agent-secret (ate-api-server-env-sources).
++apiVersion: rbac.authorization.k8s.io/v1
++kind: Role
++metadata:
++  name: ate-api-server-env-sources
++  namespace: claude-multiplex-demo
++rules:
++- apiGroups: [""]
++  resources: ["secrets"]
++  resourceNames: ["anthropic-api-key"]
++  verbs: ["get"]
++
++---
++
++apiVersion: rbac.authorization.k8s.io/v1
++kind: RoleBinding
++metadata:
++  name: ate-api-server-env-sources
++  namespace: claude-multiplex-demo
++subjects:
++- kind: ServiceAccount
++  name: ate-api-server
++  namespace: ate-system
++roleRef:
++  kind: Role
++  name: ate-api-server-env-sources
++  apiGroup: rbac.authorization.k8s.io
++
++---
++
+ # 2 worker replicas for 3 actors — the multiplex pressure that makes the
+ # substrate suspend/resume behavior visible.
+ apiVersion: ate.dev/v1alpha1
+@@ -69,6 +104,7 @@ spec:
+   containers:
+   - name: claude
+     image: ${WORKLOAD_IMAGE}
++    command: ["/run.sh"]
+     env:
+     - name: ACTOR_NAME
+       value: "luna"
+@@ -99,6 +135,7 @@ spec:
+   containers:
+   - name: claude
+     image: ${WORKLOAD_IMAGE}
++    command: ["/run.sh"]
+     env:
+     - name: ACTOR_NAME
+       value: "mars"
+@@ -129,6 +166,7 @@ spec:
+   containers:
+   - name: claude
+     image: ${WORKLOAD_IMAGE}
++    command: ["/run.sh"]
+     env:
+     - name: ACTOR_NAME
+       value: "orion"

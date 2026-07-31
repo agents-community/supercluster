@@ -7,6 +7,7 @@ import { Box, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import { readFileSync } from "node:fs";
+import { renderMarkdown } from "./markdown.mjs";
 
 const h = React.createElement;
 
@@ -42,13 +43,24 @@ const bannerLine = (text, row, offset = 0) =>
 
 const chip = (label, bg) => h(Text, { backgroundColor: bg, color: C.ink, bold: true }, ` ${label} `);
 
+// A glyph per tool so a stream of tool calls reads at a glance.
+const TOOL_ICON = { bash: "❯", write: "✎", edit: "✎", read: "◉", list: "☰", grep: "⌕", glob: "⌕", ToolSearch: "⌕" };
+
 // ── event → transcript line ──────────────────────────────────────────────────
 function eventToLine(ev, { history = false } = {}) {
   const text = ev.content?.[0]?.text ?? "";
   switch (ev.type) {
     case "user.message": return { kind: "user", text, dim: history };
     case "agent.message": return { kind: "agent", text, dim: history };
-    case "agent.tool_use": return { kind: "tool", text: ev.name ?? "tool", dim: history };
+    case "agent.tool_use": {
+      // Strip the mcp__hand__ prefix and show a short arg summary so you can
+      // see what it's doing (run bash, edit a file) — not just "a tool ran".
+      const name = (ev.name ?? "tool").replace(/^mcp__[a-z0-9]+__/, "");
+      const inp = ev.input || {};
+      let s = inp.command ?? inp.path ?? inp.pattern ?? inp.query ?? inp.file_path ?? "";
+      if (typeof s !== "string") s = "";
+      return { kind: "tool", text: name, summary: s.replace(/\s+/g, " ").slice(0, 64), dim: history };
+    }
     case "session.error": return { kind: "error", text: ev.error?.message ?? "error" };
     default: return null;
   }
@@ -57,15 +69,28 @@ function eventToLine(ev, { history = false } = {}) {
 function Line({ line }) {
   switch (line.kind) {
     case "user":
-      return h(Box, {},
+      return h(Box, { marginTop: 1 },
         chip("you", line.dim ? C.faint : C.cyan), h(Text, {}, " "),
         h(Text, { color: line.dim ? C.dim : C.text }, line.text));
     case "agent":
+      // History replays stay flat + dim; live replies get full markdown.
+      if (line.dim)
+        return h(Box, {}, chip("andromeda", C.faint), h(Text, {}, " "),
+          h(Text, { color: C.dim }, line.text));
+      return h(Box, { flexDirection: "column", marginBottom: 1 },
+        h(Box, {}, chip("andromeda", C.violet)),
+        h(Box, { flexDirection: "column", paddingLeft: 1 }, ...renderMarkdown(line.text, C)));
+    case "tool": {
+      const icon = TOOL_ICON[line.text] || "⚙";
       return h(Box, {},
-        chip("andromeda", line.dim ? C.faint : C.violet), h(Text, {}, " "),
-        h(Text, { color: line.dim ? C.dim : C.text }, line.text));
-    case "tool":
-      return h(Text, { color: C.magenta, italic: true }, `   ⚙ ${line.text}`);
+        h(Text, { color: C.magenta }, `  ${icon} `),
+        h(Text, { color: C.magenta, bold: true }, line.text),
+        line.summary ? h(Text, { color: C.faint }, `  ${line.summary}`) : null);
+    }
+    case "stream": // live-typing buffer; replaced by the final markdown message
+      return h(Box, { flexDirection: "column" },
+        h(Box, {}, chip("andromeda", C.violet)),
+        h(Box, { paddingLeft: 1 }, h(Text, { color: C.text }, (line.text || "") + "▌")));
     case "error":
       return h(Box, {}, chip("!", C.red), h(Text, { color: C.red }, ` ${line.text}`));
     case "info":
@@ -94,11 +119,12 @@ function Welcome({ cols }) {
     ])));
 }
 
-function StatusPill({ state }) {
+function StatusPill({ state, elapsed }) {
+  const secs = elapsed ? h(Text, { key: "t", color: C.faint }, ` ${elapsed}s`) : null;
   if (state === "waking")
-    return h(Text, { color: C.amber }, [h(Spinner, { key: "s", type: "dots" }), " waking from checkpoint"]);
+    return h(Text, { color: C.amber }, [h(Spinner, { key: "s", type: "dots" }), " waking from checkpoint", secs]);
   if (state === "thinking")
-    return h(Text, { color: C.violet }, [h(Spinner, { key: "s", type: "dots" }), " thinking"]);
+    return h(Text, { color: C.violet }, [h(Spinner, { key: "s", type: "dots" }), " working", secs]);
   return h(Text, { color: C.green }, "● online · it remembers");
 }
 
@@ -108,8 +134,18 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
   const [lines, setLines] = useState(initialLines);
   const [input, setInput] = useState("");
   const [state, setState] = useState("idle"); // idle | waking | thinking
+  const [elapsed, setElapsed] = useState(0);
   const cursor = useRef(initialCursor);
   const busy = state !== "idle";
+
+  // Tick an elapsed-seconds counter while the mind is working, so a long first
+  // turn shows progress instead of a silent wait.
+  useEffect(() => {
+    if (state === "idle") { setElapsed(0); return; }
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [state]);
 
   const append = (line) => line && setLines((ls) => [...ls, line]);
 
@@ -133,9 +169,21 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
       await client.send(sessionId, text, (attempt) =>
         append({ kind: "info", text: `waking the mind… (attempt ${attempt})` }));
       setState("thinking");
+      let buf = "";
+      const setStream = () => setLines((ls) => {
+        const c = ls.slice();
+        if (c.length && c[c.length - 1].kind === "stream") c[c.length - 1] = { kind: "stream", text: buf };
+        else c.push({ kind: "stream", text: buf });
+        return c;
+      });
+      const clearStream = () => setLines((ls) =>
+        ls.length && ls[ls.length - 1].kind === "stream" ? ls.slice(0, -1) : ls);
       cursor.current = await client.streamTurn(sessionId, cursor.current, (ev) => {
         if (ev.type === "session.status_running" || ev.type === "user.message") return;
-        append(eventToLine(ev));
+        if (ev.type === "agent.message_delta") { buf += ev.text || ""; setStream(); return; }
+        if (ev.type === "agent.message") { clearStream(); buf = ""; append(eventToLine(ev)); return; }
+        if (ev.type === "session.status_idle") { clearStream(); buf = ""; return; }
+        append(eventToLine(ev)); // tool_use, error
       });
     } catch (e) {
       append({ kind: "error", text: e.message });
@@ -150,7 +198,7 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
     // header band
     h(Box, { justifyContent: "space-between", paddingX: 1 },
       h(Box, {}, ...grad("✦ ANDROMEDA")),
-      h(StatusPill, { state })),
+      h(StatusPill, { state, elapsed })),
     h(Box, { paddingX: 1 }, h(Text, { color: C.faint }, "─".repeat(Math.max((stdout?.columns ?? 80) - 2, 10)))),
 
     // transcript

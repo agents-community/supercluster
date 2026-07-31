@@ -22,6 +22,11 @@ import {
   connectUpstream, removeUpstream, federatedTools, resolveFederated,
   callFederated, setGitCredentials, upstreamStatus, pullCredentials,
 } from "./gateway.mjs";
+import { initOtel } from "./otel.mjs";
+import { trace, context, propagation, SpanStatusCode } from "@opentelemetry/api";
+
+initOtel(); // start tracing before anything runs (no-op if OTEL endpoint unset)
+const tracer = trace.getTracer("agentplane-hand");
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
@@ -161,13 +166,27 @@ function buildServer() {
   }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args = {} } = req.params;
-    try {
-      if (OWN_NAMES.has(name)) return runOwnTool(name, args);
-      if (resolveFederated(name)) return await callFederated(name, args);
-      return errResult(`unknown tool: ${name}`);
-    } catch (e) {
-      return errResult(e.message);
-    }
+    // One span per tool execution — this is what makes hand work visible in
+    // Jaeger (name + success only; no command/content, for privacy).
+    return tracer.startActiveSpan(`hand.tool ${name}`, async (span) => {
+      span.setAttribute("hand.tool", name);
+      span.setAttribute("hand.tool.federated", !OWN_NAMES.has(name));
+      try {
+        let r;
+        if (OWN_NAMES.has(name)) r = runOwnTool(name, args);
+        else if (resolveFederated(name)) r = await callFederated(name, args);
+        else r = errResult(`unknown tool: ${name}`);
+        span.setAttribute("hand.tool.is_error", !!r.isError);
+        if (r.isError) span.setStatus({ code: SpanStatusCode.ERROR });
+        return r;
+      } catch (e) {
+        span.recordException(e);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
+        return errResult(e.message);
+      } finally {
+        span.end();
+      }
+    });
   });
   return server;
 }
@@ -241,14 +260,17 @@ const server = http.createServer(async (req, res) => {
   const mcp = buildServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => { transport.close(); mcp.close(); });
+  // If the brain propagates a traceparent header, nest our tool spans under its
+  // turn; otherwise they stand alone (still visible, correlate by time).
+  const parentCtx = propagation.extract(context.active(), req.headers);
   try {
     await mcp.connect(transport);
     if (req.method === "POST") {
       const body = await readJson(req).catch(() => null);
       if (body === null) { res.writeHead(400); return res.end(JSON.stringify({ error: "invalid json" })); }
-      await transport.handleRequest(req, res, body);
+      await context.with(parentCtx, () => transport.handleRequest(req, res, body));
     } else {
-      await transport.handleRequest(req, res);
+      await context.with(parentCtx, () => transport.handleRequest(req, res));
     }
   } catch (e) {
     console.error("mcp error:", e.message);

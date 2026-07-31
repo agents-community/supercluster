@@ -49,6 +49,10 @@ spec:
     - name: HAND_ADMIN_TOKEN
       valueFrom:
         secretKeyRef: {name: agentplane-hand-admin, key: token}
+    # Tracing: emit a span per tool execution to the collector (Jaeger). Fills
+    # the brain's "blocked on tool" gap with the actual hand-side work.
+    - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4318"}
+    - {name: OTEL_SERVICE_NAME, value: "agentplane-hand"}
     volumeMounts:
     - {name: workspace, mountPath: /workspace}
   volumes:

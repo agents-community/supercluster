@@ -23,6 +23,12 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["actortemplates"]
   verbs: ["get", "list", "watch", "create", "delete"]
+# Self-service access (POST /v1/access) mints tokens into this one Secret.
+# Scoped to the single resource by name — serve can read/update only it.
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["agentplane-serve-tokens"]
+  verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

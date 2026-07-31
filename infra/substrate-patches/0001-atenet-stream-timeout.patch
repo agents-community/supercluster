@@ -1,0 +1,20 @@
+diff --git a/cmd/atenet/internal/router/xds.go b/cmd/atenet/internal/router/xds.go
+index e7e1602..c7443e8 100644
+--- a/cmd/atenet/internal/router/xds.go
++++ b/cmd/atenet/internal/router/xds.go
+@@ -373,7 +373,14 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
+ 								ClusterSpecifier: &routev3.RouteAction_Cluster{
+ 									Cluster: "dynamic_forward_proxy_cluster",
+ 								},
+-								Timeout: durationpb.New(10 * time.Second),
++								// LOCAL FIX (upstream-PR candidate): 0 disables the
++								// total-duration route timeout so long-lived streaming
++								// responses (e.g. SSE event streams served by actors)
++								// are not cut off after 10s. Liveness is still bounded
++								// by IdleTimeout — a heartbeating stream stays open, a
++								// silent/dead upstream is reaped after 5 minutes.
++								Timeout:     durationpb.New(0),
++								IdleTimeout: durationpb.New(300 * time.Second),
+ 							},
+ 						},
+ 					},

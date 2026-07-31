@@ -34,10 +34,16 @@ spec:
         # upstreams + credentials into a session's hand (/admin/upstreams).
         - name: HAND_ADMIN_TOKEN
           valueFrom: { secretKeyRef: { name: agentplane-hand-admin, key: token } }
+        # Self-service access: emails allowed to self-issue a token via
+        # POST /v1/access, from a mounted ConfigMap (hot-reloaded).
+        - { name: AGENTPLANE_ALLOWED_EMAILS_FILE, value: "/etc/agentplane-access/emails" }
         # Escrow (optional — needs Workload Identity on the ServiceAccount):
         - { name: AGENTPLANE_BUCKET, value: "" }
         # Tracing (optional):
         - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
+        # Inject Claude Code LLM telemetry into every baked agent (llm_request
+        # spans + token/cost metrics → the same collector). See docs/observability.md.
+        - { name: AGENTPLANE_OTEL_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
         readinessProbe:
           httpGet: { path: /healthz, port: 7433 }
           initialDelaySeconds: 3
@@ -50,11 +56,16 @@ spec:
           limits: { memory: "512Mi" }
         volumeMounts:
         - { name: tokens, mountPath: /etc/agentplane, readOnly: true }
+        - { name: allowed-emails, mountPath: /etc/agentplane-access, readOnly: true }
       volumes:
       - name: tokens
         secret:
           secretName: agentplane-serve-tokens
           optional: true          # serve starts fine before any token is issued
+      - name: allowed-emails
+        configMap:
+          name: agentplane-allowed-emails
+          optional: true          # self-service access is off until this exists
 ---
 apiVersion: v1
 kind: Service
