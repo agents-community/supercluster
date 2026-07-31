@@ -1,0 +1,13 @@
+{
+  "_comment": "Per-session egress policy. In production serve renders this from the vault (Secret Manager) — the token values below are DEMO placeholders, not real secrets.",
+  "allow": {
+    "httpbin.org": {
+      "type": "basic",
+      "username": "x-access-token",
+      "token": "s3cr3t-from-vault"
+    },
+    "github.com": {
+      "type": "none"
+    }
+  }
+}
