@@ -1,10 +1,10 @@
 diff --git a/cmd/atenet/internal/router/xds.go b/cmd/atenet/internal/router/xds.go
-index e7e1602..c7443e8 100644
+index e422376..bad8605 100644
 --- a/cmd/atenet/internal/router/xds.go
 +++ b/cmd/atenet/internal/router/xds.go
-@@ -373,7 +373,14 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
+@@ -599,7 +599,14 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
  								ClusterSpecifier: &routev3.RouteAction_Cluster{
- 									Cluster: "dynamic_forward_proxy_cluster",
+ 									Cluster: OriginalDstClusterName,
  								},
 -								Timeout: durationpb.New(10 * time.Second),
 +								// LOCAL FIX (upstream-PR candidate): 0 disables the
