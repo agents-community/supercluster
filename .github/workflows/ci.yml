@@ -4,6 +4,10 @@ on:
     branches: [main]
   pull_request:
 
+# CI runs the unit level only. Integration layers run locally:
+#   hand MCP smoke   docker run --rm -v "$PWD/hand":/app -w /app node:22-slim node test/mcp-smoke.mjs
+#   egress proof     ./egress/proof/run.sh
+#   live smoke       AGENTPLANE_URL=... AGENTPLANE_TOKEN=... ./test/smoke-live.sh
 jobs:
   # Go control plane, built against the pinned+patched Substrate checkout.
   # This job IS the patch process check: if a patch stops applying on
@@ -34,23 +38,3 @@ jobs:
           go build ./...
           go vet ./...
           go test ./...
-
-  # The hand's MCP gateway, driven over streamable HTTP exactly like the
-  # brain drives it (initialize -> tools/list -> tools/call).
-  hand-mcp:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }   # matches hand/Dockerfile FROM node:22-slim
-      - working-directory: hand
-        run: |
-          npm ci
-          node test/mcp-smoke.mjs
-
-  # Secretless egress: proxy injects the credential, sandbox holds nothing.
-  egress-proof:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ./egress/proof/run.sh
