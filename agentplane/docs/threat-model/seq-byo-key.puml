@@ -1,0 +1,25 @@
+@startuml seq-byo-key
+title Bring-your-own vendor key → actor memory → snapshot
+
+actor User
+participant "serve" as serve
+participant "brain b-<sid>" as brain
+participant "Anthropic API" as api
+database "GCS snapshot" as gcs
+
+User -> serve : POST /v1/sessions {"apiKey":"sk-…"}\nor PUT /v1/sessions/{id}/key
+serve -> brain : forward once (never stored server-side ✅,\nnever logged ✅, never an event ✅)
+brain -> brain : apiKey held in process memory only
+brain -> api : turn request with that key
+
+== suspend ==
+brain -> gcs : <b>memory image written to GCS</b>
+note right of gcs #FFE4E4
+  <b>F6</b>: the key is IN the snapshot, and so is any
+  credential the paired hand pulled. Bucket read = secret read.
+  Mitigation today: CMEK + bucket IAM. Real fix: F9.
+end note
+
+== resume ==
+gcs -> brain : restore — key still in memory, no re-supply needed
+@enduml

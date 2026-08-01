@@ -21,5 +21,6 @@ $ agentplane session send -id sess-x7k2m9qw4a -m "Codeword?"
 - **[Agents](agents.md)** — defining agents; harness templates in `examples/`
 - **[Brain server](brain-server.md)** — architecture of a durable mind
 - **[Harness interface](harness-interface.md)** — adding a brain vendor
+- **[Threat model](threat-model/README.md)** — STRIDE analysis, trust boundaries, and PlantUML diagrams of every token/credential exchange
 - **[Observability](observability.md)** — end-to-end tracing (serve → atenet → brain → hand)
 - **[Reliability runbook](runbook-brain-reliability.md)** — drills + findings log

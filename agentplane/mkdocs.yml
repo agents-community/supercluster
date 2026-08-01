@@ -25,6 +25,8 @@ nav:
       - Agents & AgentSpec: agents.md
       - Control-plane API: api.md
       - Observability & metrics: observability.md
+  - Security:
+      - Threat model: threat-model/README.md
   - Operations:
       - Reliability runbook: runbook-brain-reliability.md
   - Contributing:

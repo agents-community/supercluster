@@ -1,0 +1,38 @@
+@startuml seq-vault-grant
+title Credential exchange: vault → HMAC grant → hand pull (as deployed)
+
+actor User
+participant "andromeda" as tui
+participant "serve" as serve
+participant "Secret Manager" as sm
+participant "hand h-<sid>" as hand
+participant "GitHub / upstream" as ext
+
+== 1. store (user-owned) ==
+User -> tui : cred set gh-token
+tui -> serve : PUT /v1/credentials/gh-token\nBearer apl_… + {"value":"ghp_…"}\n<color:#CC0000><b>cleartext over HTTP (F2)</b></color>
+serve -> sm : create/addVersion\nid = agentplane-cred-<user>-gh-token\n<color:#CC0000>ambiguous concatenation (F8)</color>
+note right of sm : value never returned by the API afterwards
+
+== 2. session create → grant ==
+User -> serve : POST /v1/sessions {"agent":"starter"}
+serve -> serve : names = templateCredentials(agent)\ngrant = HMAC(sid,user,names,exp=<b>now+30d</b>)\n<color:#CC0000>key == HAND_ADMIN_TOKEN (F3), TTL 30d (F4)</color>
+serve -> hand : POST /admin/grant  {serveBase, grant, credentials}\nBearer HAND_ADMIN_TOKEN (shared by every hand)
+note right of hand : no secret VALUE in this message — only the grant
+
+== 3. hand pulls the value ==
+hand -> serve : GET /v1/hand/credentials/gh-token\nBearer <grant>
+serve -> serve : verifyGrant: HMAC + exp only\n<color:#CC0000>not bound to the calling actor (F3)</color>
+serve -> sm : access(user, name)
+sm --> serve : {"type":"git","token":"ghp_…"}
+serve --> hand : 200 payload
+hand -> hand : write ~/.git-credentials (0600)\n<color:#CC0000>now inside the sandbox & its snapshots (F6)</color>
+
+== 4. use ==
+hand -> ext : git push (credential from disk)
+note over hand, ext #FFE4E4
+  <b>Target state (F9, egress/):</b> steps 3-4 disappear —
+  the hand calls uncredentialed and the egress proxy injects.
+  <b>Not deployed:</b> zero egress pods in the cluster today.
+end note
+@enduml
