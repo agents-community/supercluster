@@ -33,6 +33,20 @@ const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
 const ADMIN_TOKEN = process.env.HAND_ADMIN_TOKEN || ""; // gate /admin; empty = open (dev)
 mkdirSync(WORKDIR, { recursive: true });
 
+// A hand actor serves exactly one session for its whole life, and atenet
+// routes to it by actor name — so the first request's Host header IS our
+// identity (`h-sess-…`). Latch it once; constant thereafter, race-free.
+let ACTOR_NAME = "";
+let SESSION_ID = "";
+function latchIdentity(host) {
+  if (ACTOR_NAME || !host) return;
+  const name = host.split(":")[0].split(".")[0];
+  if (/^h-sess-[a-z0-9]+$/.test(name)) {
+    ACTOR_NAME = name;
+    SESSION_ID = name.slice(2); // strip the `h-` role prefix
+  }
+}
+
 // Resolve a caller-supplied path inside the workspace (absolute paths under
 // /workspace are honored; relative ones resolve against it). Refuses escapes.
 function resolveInWorkdir(p) {
@@ -171,6 +185,10 @@ function buildServer() {
     return tracer.startActiveSpan(`hand.tool ${name}`, async (span) => {
       span.setAttribute("hand.tool", name);
       span.setAttribute("hand.tool.federated", !OWN_NAMES.has(name));
+      if (SESSION_ID) {
+        span.setAttribute("agentplane.session", SESSION_ID);
+        span.setAttribute("agentplane.actor", ACTOR_NAME);
+      }
       try {
         let r;
         if (OWN_NAMES.has(name)) r = runOwnTool(name, args);
@@ -255,6 +273,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname !== "/mcp") { res.writeHead(404); return res.end("not found"); }
+  latchIdentity(req.headers.host);
 
   // Stateless: build a fresh server + transport per request.
   const mcp = buildServer();
