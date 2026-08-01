@@ -27,6 +27,7 @@ export ANDROMEDA_TOKEN=…
 | Enter | send |
 | `/sleep` | suspend — the mind checkpoints in place (any message wakes it) |
 | `/sessions` | list your sessions for this agent |
+| `/usage` | tokens & cost this session (as the harness reports them) |
 | `/help` | list all commands |
 | `/quit` | detach (Esc does the same) |
 | Ctrl+S | alias for `/sleep` |

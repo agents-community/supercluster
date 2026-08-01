@@ -82,6 +82,7 @@ andromeda                           # list everything, then pick
 | **enter** | send your message |
 | **/sleep** | suspend the mind in place (frees resources; wakes on your next message) |
 | **/sessions** | list your sessions for this agent |
+| **/usage** | tokens & cost this session |
 | **/help** | list all commands |
 | **/quit** | detach (esc works too) |
 | **esc** | detach — the mind keeps its full memory; re-attach any time |

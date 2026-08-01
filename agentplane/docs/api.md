@@ -21,7 +21,7 @@ agentplane serve -addr :7433
 | POST | `/v1/sessions` | `{"agent":"brain"}` → `201 {"id","agent","harness"}`; optional `"apiKey"` = BYO-key |
 | PUT | `/v1/sessions/{id}/key` | set/replace the session's ephemeral BYO vendor key |
 | GET | `/v1/sessions` | derived status: `sleeping / idle / running / unreachable`; `?agent=` filters |
-| GET | `/v1/sessions/{id}` | session object; adds `busy/queued/last_event_at` when awake |
+| GET | `/v1/sessions/{id}` | session object; adds `busy/queued/last_event_at` + `usage` (harness-reported session totals) when awake |
 | DELETE | `/v1/sessions/{id}` | cascade: escrow → delete actor → remove snapshots |
 | POST | `/v1/sessions/{id}/suspend` | checkpoint in place; `409` mid-turn unless `?force=true` |
 | POST | `/v1/sessions/{id}/message` | body `{"message":"…"}` (or an `events` array) → `202`; auto-wakes, retries 5xx wake races |

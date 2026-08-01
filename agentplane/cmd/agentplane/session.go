@@ -226,9 +226,10 @@ func sessionSend(sc sessionCtx, args []string) {
 
 // healthInfo probes the brain's /healthz. ok=false when unreachable.
 type healthInfo struct {
-	Busy        bool   `json:"busy"`
-	Queued      int    `json:"queued"`
-	LastEventAt string `json:"last_event_at"`
+	Busy        bool            `json:"busy"`
+	Queued      int             `json:"queued"`
+	LastEventAt string          `json:"last_event_at"`
+	Usage       json.RawMessage `json:"usage,omitempty"` // harness-reported session totals, relayed verbatim
 }
 
 func probeHealth(sc sessionCtx, brain string) (h healthInfo, ok bool) {
