@@ -1,0 +1,36 @@
+# The idle dispatcher — the multiplexing keystone. Sweeps every 30s and
+# suspends minds idle >120s (escrow-first, never mid-turn), brain AND paired
+# hand, so pool workers recycle and N workers serve many×N sessions.
+#
+# Same image + ServiceAccount as serve (same binary, same RBAC/WI); it's a
+# control loop, not a data path — 1 replica, crash-and-restart is fine.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentplane-dispatcher
+  namespace: agentplane
+  labels: { app: agentplane-dispatcher }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: agentplane-dispatcher }
+  template:
+    metadata:
+      labels: { app: agentplane-dispatcher }
+    spec:
+      serviceAccountName: agentplane-serve
+      containers:
+      - name: dispatcher
+        image: gcr.io/PROJECT_ID/ate-images/agentplane-serve:latest  # same image as serve; set on deploy
+        command: ["/usr/local/bin/agentplane"]
+        args: ["dispatcher", "-idle-after=120s", "-interval=30s"]
+        env:
+        - { name: SUBSTRATE_ATEAPI, value: "api.ate-system.svc:443" }
+        - { name: SUBSTRATE_ATENET, value: "atenet-router.ate-system.svc:80" }
+        - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
+        # escrow-before-suspend needs the snapshot bucket; set to the same
+        # value as serve's AGENTPLANE_BUCKET on deploy.
+        - { name: AGENTPLANE_BUCKET, value: "" }
+        resources:
+          requests: { cpu: 20m, memory: 64Mi }
+          limits: { memory: 128Mi }
