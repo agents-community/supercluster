@@ -1,0 +1,27 @@
+@startuml seq-hand-admin
+title Hand admin plane — one shared token for every hand (F3)
+
+participant "serve" as serve
+participant "atenet (Envoy)\nHost-header routing" as net
+participant "hand h-<sid>" as hand
+participant "another session's hand\nh-<other>" as other
+
+serve -> net : POST /admin/identity  {session, actor}
+net -> hand : Host: h-<sid>.agents…
+serve -> net : POST /admin/upstreams {mcp servers + headers}
+net -> hand : (federates user's MCP servers, with credentials)
+serve -> net : POST /admin/grant {grant, names}
+net -> hand : (hand then pulls values — see seq-vault-grant)
+hand -> hand : adminAuthed(): compare Bearer to HAND_ADMIN_TOKEN
+
+note over hand, other #FFE4E4
+  The token is <b>the same in every hand</b> (one Secret, mounted everywhere)
+  and it is <b>also the grant-signing key</b> (serve.go:174).
+  With <b>no NetworkPolicy (F5)</b>, model-generated code in one hand can:
+   1. read its own env → obtain the token,
+   2. reach h-<other> directly → drive another session's admin plane,
+   3. sign its own grants → pull ANY user's vault credentials.
+  Fix: separate keys + per-session tokens + ActorIdentity binding.
+end note
+hand -[#CC0000]-> other : lateral movement (possible today)
+@enduml

@@ -1,0 +1,74 @@
+@startuml c4-components
+title agentplane — components, protocols & trust boundaries (as deployed 2026-08-01)
+
+skinparam rectangle {
+  BackgroundColor<<danger>> #FFE4E4
+  BorderColor<<danger>> #CC0000
+}
+legend top left
+  Every arrow is labeled  <b>protocol / authn</b>
+  <b><color:#CC0000>RED</color></b> = missing or weak authentication (see findings F1-F10)
+end legend
+
+actor "User / tester" as user
+
+package "Internet" {
+  rectangle "andromeda TUI\n(npx, token in ~/.andromeda 0600)" as tui
+}
+
+package "GKE cluster" {
+  package "namespace: agentplane" {
+    rectangle "Ingress / LB\n136.68.213.85.nip.io\n<b>NO TLS</b> (F2)" <<danger>> as lb
+    rectangle "agentplane-serve\nKSA agentplane-serve + Workload Identity" as serve
+    rectangle "agentplane-dispatcher\n(same KSA)" as disp
+    rectangle "brain actor  b-<sid>\ngVisor · harness + conversation" as brain
+    rectangle "hand actor  h-<sid>\ngVisor · tools + /workspace\n<b>holds pulled credentials</b> (F6)" <<danger>> as hand
+  }
+  package "namespace: ate-system" {
+    rectangle "atenet router (Envoy)\nxDS + ext_proc" as atenet
+    rectangle "ateapi (control plane)" as ateapi
+  }
+  package "namespace: otel-system" {
+    rectangle "OTel collector → Jaeger" as otel
+  }
+}
+
+package "Google Cloud" {
+  rectangle "Secret Manager\nagentplane-cred-<user>-<name>" as sm
+  rectangle "GCS snapshots + transcripts\n<b>snapshots contain secrets</b> (F6)" <<danger>> as gcs
+  rectangle "Cloud Logging\n(hand journal = audit trail)" as clog
+}
+
+cloud "Vendor LLM APIs\n(Anthropic / OpenAI / Google)" as llm
+cloud "User's MCP servers\n& external systems (GitHub…)" as ext
+
+user --> tui
+tui --> lb : <b>HTTP</b> / bearer apl_… \n<color:#CC0000>cleartext (F2)</color>
+lb --> serve : HTTP / —
+serve --> ateapi : <b>gRPC/TLS</b> / <color:#CC0000>InsecureSkipVerify (F10)</color>
+serve --> atenet : HTTP / Host-header routing\n<color:#CC0000>no session ownership check (F1)</color>
+disp --> ateapi : gRPC/TLS / same KSA
+disp --> atenet : HTTP / health probe before suspend
+atenet --> brain : HTTP / — (network position only)
+atenet --> hand : HTTP / — (network position only)
+brain --> atenet : <b>MCP over streamable HTTP</b> / — \n(tool calls, traceparent propagated)
+serve --> hand : POST /admin/* via atenet\n<b>shared HAND_ADMIN_TOKEN</b> <color:#CC0000>(F3)</color>
+hand --> serve : GET /v1/hand/credentials/{name}\n<b>HMAC grant, 30d TTL</b> <color:#CC0000>(F3,F4)</color>
+serve --> sm : GCP API / <b>Workload Identity</b>
+serve --> gcs : transcript escrow / WI
+disp --> gcs : escrow (gcloud) / WI <color:#CC0000>403 today (#17)</color>
+brain --> llm : HTTPS / vendor API key (BYO or shared)
+hand --> ext : <b>HTTPS, NAT'd worker IP</b>\n<color:#CC0000>no egress policy or injection yet (F9)</color>
+hand --> clog : stdout journal
+brain --> otel : OTLP
+hand --> otel : OTLP (hand.tool spans)
+serve --> otel : OTLP (trace root)
+ateapi --> gcs : checkpoint / restore snapshots
+
+note bottom of hand
+  <b>Trust boundary 4 — the important one</b>
+  Model-generated code executes here.
+  Contained by gVisor only; <color:#CC0000>no NetworkPolicy (F5)</color>
+  so it can reach serve, atenet and other actors.
+end note
+@enduml

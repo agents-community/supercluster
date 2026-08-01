@@ -1,0 +1,46 @@
+@startuml seq-egress-injection
+title Egress credential injection — DESIGNED vs DEPLOYED
+
+box "DEPLOYED TODAY (F6/F9)" #FFE4E4
+participant "hand h-<sid>\n(holds the credential)" as hand1
+participant "worker NAT" as nat
+end box
+participant "GitHub / API" as ext1
+
+hand1 -> hand1 : read ~/.git-credentials\n(pulled via grant; in memory + snapshot)
+hand1 -> nat : HTTPS + Authorization, no inspection
+nat -> ext1 : source = worker IP
+note over hand1 #FFE4E4
+  Secret lives inside the sandbox that runs
+  model-generated code. No allowlist, no per-call
+  audit, no central rotation. <b>Any</b> destination reachable.
+end note
+
+== ================================================== ==
+
+box "DESIGNED (egress/, proof passed locally — NOT on cluster)" #E4FFE4
+participant "hand h-<sid>\n(holds NOTHING)" as hand2
+participant "egress gateway\n(TLS-terminating, internal CA)" as prox
+end box
+participant "vault (Secret Manager)" as sm2
+participant "GitHub / API" as ext2
+
+hand2 -> prox : HTTPS CONNECT, <b>no credential</b>
+prox -> prox : identify caller\n(v1: per-session pairing;\nv2: Substrate ActorIdentity mTLS)
+prox -> prox : destination allowlisted?
+alt not allowlisted
+  prox --> hand2 : <b>403 egress denied by policy</b>
+else allowlisted
+  prox -> sm2 : fetch that user's secret for this destination
+  prox -> ext2 : re-originate + <b>inject Authorization</b>\n(+ idempotency key for unsafe methods)
+  ext2 --> prox : response
+  prox --> hand2 : response
+  prox -> prox : audit line: who / where / when
+end
+note over hand2 #E4FFE4
+  Secret never enters the sandbox. One controlled
+  egress point: allowlist, DLP, per-call audit,
+  central rotation, per-user attribution.
+  <b>Proof verified locally (8/8), never on-cluster.</b>
+end note
+@enduml

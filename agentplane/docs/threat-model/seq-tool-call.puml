@@ -1,0 +1,31 @@
+@startuml seq-tool-call
+title One message end-to-end (with the controls that exist today)
+
+actor User
+participant "andromeda" as tui
+participant "serve" as serve
+participant "atenet" as net
+participant "brain b-<sid>" as brain
+participant "hand h-<sid>" as hand
+database "Cloud Logging" as log
+
+User -> tui : "clone the repo and run tests"
+tui -> serve : POST /v1/sessions/{id}/message  (bearer)
+serve -> net : relay (retries wake races)
+net -> brain : resume if asleep (~1s from checkpoint)
+brain -> brain : LLM turn → decides a tool call
+brain -> net : MCP tools/call  (traceparent + _meta.toolUseId)
+net -> hand : Host: h-<sid>…
+hand -> hand : <b>exactly-once</b>: same toolUseId already executed?\n→ replay stored result, do NOT re-execute ✅
+hand -> hand : journal start {tool, hash, key, summary}
+hand -> hand : execute in /workspace (gVisor)
+hand -> log : journal end {outcome, ms}  ← <b>audit trail, outlives the session</b> ✅
+hand --> brain : result (+ advisory if a content-duplicate)
+brain --> serve : agent.message (+ deltas streamed live)
+serve --> tui : SSE
+
+note over hand #FFE4E4
+  Controls present: sandbox, exactly-once, journal, per-tool spans.
+  Missing: egress policy (F9), NetworkPolicy (F5), session ownership (F1).
+end note
+@enduml
