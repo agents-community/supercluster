@@ -69,10 +69,22 @@ export const claudeCode = {
     // in-flight turn (finding #1). The runtime aborts the signal on deadline.
     const onAbort = () => { try { q.interrupt?.(); } catch { /* best-effort */ } };
     ctx.signal.addEventListener("abort", onAbort);
+    // The SDK connects to MCP servers ONCE, at init. If the hand was down at
+    // that moment (wake race, pool exhaustion), this session would otherwise be
+    // tool-less FOREVER — the durable mind preserves the failed connect. Detect
+    // it and self-heal: finish the turn, then end the stream so the runtime's
+    // restart (resume-by-id) reconnects on the next turn.
+    const handConfigured = !!options.mcpServers?.hand;
+    let handDown = false;
     try {
       for await (const msg of q) {
         if (msg.type === "system" && msg.subtype === "init") {
           if (msg.session_id && msg.session_id !== ctx.sessionId) ctx.setSessionId(msg.session_id);
+          if (handConfigured) {
+            const hs = (msg.mcp_servers || []).find((s) => s.name === "hand");
+            handDown = !hs || hs.status !== "connected";
+            if (handDown) console.error("hand MCP not connected at init:", JSON.stringify(hs ?? "absent"));
+          }
           continue;
         }
         // Live text deltas (includePartialMessages). Ephemeral — the runtime
@@ -109,6 +121,10 @@ export const claudeCode = {
               cache_creation_tokens: u.cache_creation_input_tokens ?? null,
             },
           };
+          if (handDown) {
+            console.error("restarting harness to reconnect the hand (turn completed cleanly)");
+            return; // stream end → runtime restarts us (resume-by-id) → fresh MCP connect
+          }
           continue;
         }
       }
