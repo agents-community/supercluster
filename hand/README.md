@@ -23,6 +23,22 @@ serve into actor memory (git credentials / env / header form). The
 [`egress/`](../egress/) gateway supersedes this pull path: goal state is the
 hand holding **no** credentials at all.
 
+## Execution journal & idempotency advisory
+
+Every **mutating** tool call (`bash`, `write`, `edit`) is journaled — a start
+line and a completion line (tool, args hash, command summary, outcome,
+duration) — to two places at once: `<workdir>/.hand-journal.jsonl` (durable
+with the session, visible to the model) and **stdout**, which Cloud Logging
+ingests with the actor's labels and retains after the hand is gone. That
+stdout copy is the operator audit trail: it records what was *actually
+executed*, not just what the model intended.
+
+An identical mutation arriving within 10 minutes still executes, but its
+result carries an advisory ("an identical call completed Ns ago") so the
+model can recognize a possible retry-after-lost-response before doubling a
+side effect. Never silent dedup — the model decides. Pure tools
+(`read`/`list`/`grep`/`glob`) skip all of this.
+
 ## Observability
 
 With `OTEL_EXPORTER_OTLP_ENDPOINT` set, every tool execution is a span

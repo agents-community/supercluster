@@ -77,6 +77,17 @@ try {
   const p = await client.callTool({ name: "bash", arguments: { command: "pwd" } });
   check("bash cwd is the sandbox workdir", (p.content?.[0]?.text ?? "").includes(WORKDIR));
 
+  // -- journal + idempotency advisory (issue #14) ---------------------------
+  const m1 = await client.callTool({ name: "bash", arguments: { command: "echo mutate >> j.txt" } });
+  check("first mutation carries no advisory", !(m1.content?.[0]?.text ?? "").includes("[hand] note"), m1.content?.[0]?.text);
+  const m2 = await client.callTool({ name: "bash", arguments: { command: "echo mutate >> j.txt" } });
+  check("identical mutation carries the advisory", (m2.content?.[0]?.text ?? "").includes("[hand] note: an identical bash call"), m2.content?.[0]?.text);
+  const jr = await client.callTool({ name: "bash", arguments: { command: "wc -l < .hand-journal.jsonl" } });
+  const jlines = (jr.content?.[0]?.text ?? "").split("\n")[1]?.trim();
+  check("journal recorded start+end per mutation", Number(jlines) >= 4, `journal lines: ${jlines}`);
+  const pure = await client.callTool({ name: "list", arguments: {} });
+  check("pure tools never carry advisories", !(pure.content?.[0]?.text ?? "").includes("[hand] note"));
+
   // -- admin surface is actually gated --------------------------------------
   const noAuth = await fetch(`http://127.0.0.1:${PORT}/admin/upstreams`, { method: "POST", body: "{}" });
   check("admin rejects missing bearer", noAuth.status === 401 || noAuth.status === 403, `status ${noAuth.status}`);
