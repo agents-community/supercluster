@@ -55,6 +55,18 @@ export function createRuntime({ workdir, spec, harness, identity }) {
   let delivered = [];        // pulled into the harness, no result yet (re-queue on teardown)
   let sessionId = existsSync(SESSION_ID_FILE) ? readFileSync(SESSION_ID_FILE, "utf8").trim() : null;
 
+  // Session-lifetime usage totals, summed from each turn's harness-reported
+  // usage (we never do price math — the vendor SDK does). Lives in the mind's
+  // memory, so the meter is durable with it: survives suspend/resume, dies
+  // with the session. Fields a vendor doesn't report simply never advance.
+  const usage = { turns: 0, cost_usd: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
+  function addUsage(u) {
+    if (!u) return;
+    usage.turns += 1;
+    for (const k of ["cost_usd", "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"])
+      if (typeof u[k] === "number") usage[k] += u[k];
+  }
+
   // Ephemeral per-session vendor key (BYO-key). Lives ONLY here, in process
   // memory: never written to disk, never an event, never logged. It survives
   // suspend/resume and harness restarts (it's in the checkpointed memory) and
@@ -94,6 +106,7 @@ export function createRuntime({ workdir, spec, harness, identity }) {
       busy = false;
       turnStartedAt = 0;
       delivered = [];
+      addUsage(ev.usage);
       emit("session.status_idle", { stop_reason: ev.stop_reason, usage: ev.usage });
     }
   }
@@ -196,7 +209,7 @@ export function createRuntime({ workdir, spec, harness, identity }) {
     // Returns nothing and logs nothing — the key must not surface anywhere.
     setApiKey(k) { apiKey = k || null; },
     health() {
-      return { ok: true, session: identity(), harness: harness.name, sdk_session_id: sessionId, busy, queued: queue.length, last_event_at: lastEventAt, events: seq, keyed: apiKey != null };
+      return { ok: true, session: identity(), harness: harness.name, sdk_session_id: sessionId, busy, queued: queue.length, last_event_at: lastEventAt, events: seq, keyed: apiKey != null, usage };
     },
   };
 }

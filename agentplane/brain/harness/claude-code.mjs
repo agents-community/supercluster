@@ -95,10 +95,19 @@ export const claudeCode = {
           continue;
         }
         if (msg.type === "result") {
+          // The SDK does the price math (total_cost_usd) — we only report it.
+          const u = msg.usage ?? {};
           yield {
             type: "session.status_idle",
             stop_reason: { type: msg.subtype === "success" ? "end_turn" : "error" },
-            usage: { cost_usd: msg.total_cost_usd ?? null, turns: msg.num_turns ?? null },
+            usage: {
+              cost_usd: msg.total_cost_usd ?? null,
+              turns: msg.num_turns ?? null,
+              input_tokens: u.input_tokens ?? null,
+              output_tokens: u.output_tokens ?? null,
+              cache_read_tokens: u.cache_read_input_tokens ?? null,
+              cache_creation_tokens: u.cache_creation_input_tokens ?? null,
+            },
           };
           continue;
         }

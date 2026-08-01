@@ -553,6 +553,9 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		if a.GetStatus().String() == "STATUS_RUNNING" {
 			if h, ok := probeHealth(s.sc, brain); ok {
 				out["busy"], out["queued"], out["last_event_at"] = h.Busy, h.Queued, h.LastEventAt
+				if len(h.Usage) > 0 {
+					out["usage"] = h.Usage
+				}
 				if h.Busy {
 					out["status"] = "running"
 				} else {

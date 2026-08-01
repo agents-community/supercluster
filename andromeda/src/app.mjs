@@ -125,6 +125,21 @@ const COMMANDS = {
       }
     },
   },
+  usage: {
+    desc: "tokens & cost this session (as the harness reports them)",
+    run: async ({ client, sessionId, append }) => {
+      try {
+        const s = await client.session(sessionId);
+        const u = s.usage;
+        if (!u) return append({ kind: "info", text: s.status === "sleeping" ? "the mind is asleep — usage shows once it's awake" : "no usage reported yet" });
+        const n = (x) => (typeof x === "number" ? x.toLocaleString() : "—");
+        const cost = typeof u.cost_usd === "number" && u.cost_usd > 0 ? `$${u.cost_usd.toFixed(4)}` : "—";
+        append({ kind: "info", text: `turns ${n(u.turns)} · in ${n(u.input_tokens)} tok · out ${n(u.output_tokens)} tok · cache read ${n(u.cache_read_tokens)} · cost ${cost}` });
+      } catch (e) {
+        append({ kind: "error", text: `usage: ${e.message}` });
+      }
+    },
+  },
   help: {
     desc: "show available commands",
     run: ({ append }) => {
