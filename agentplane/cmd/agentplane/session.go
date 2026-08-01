@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -53,9 +55,34 @@ func newSessionCtx() sessionCtx {
 	}
 }
 
+// ateapiTLS builds the client TLS config for the Substrate control plane
+// (threat-model F10). When AGENTPLANE_ATEAPI_CA points at a PEM bundle the
+// server certificate is verified against it; without one we fall back to
+// skipping verification (the historical behavior) and say so loudly, since
+// that defeats the mTLS Substrate now runs between its components.
+func ateapiTLS() *tls.Config {
+	if p := os.Getenv("AGENTPLANE_ATEAPI_CA"); p != "" {
+		if pem, err := os.ReadFile(p); err == nil {
+			pool := x509.NewCertPool()
+			if pool.AppendCertsFromPEM(pem) {
+				return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+			}
+			log.Printf("WARN ateapi CA %s parsed no certificates — falling back to unverified TLS", p)
+		} else {
+			log.Printf("WARN ateapi CA %s unreadable (%v) — falling back to unverified TLS", p, err)
+		}
+	}
+	insecureAteapiOnce.Do(func() {
+		log.Printf("WARN ateapi TLS is UNVERIFIED (set AGENTPLANE_ATEAPI_CA to a PEM bundle to fix — threat-model F10)")
+	})
+	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
+}
+
+var insecureAteapiOnce sync.Once
+
 func (s sessionCtx) dial() (ateapipb.ControlClient, func(), error) {
 	conn, err := grpc.NewClient(s.ateapi,
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})),
+		grpc.WithTransportCredentials(credentials.NewTLS(ateapiTLS())),
 		// Client spans for CreateActor/SuspendActor/…: no-op unless a tracer
 		// provider is installed (i.e. under `serve` with OTLP configured).
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()))

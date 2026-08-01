@@ -1,0 +1,63 @@
+# Default-deny for the actor pools (threat-model F5). Model-generated code runs
+# in these sandboxes; without a policy it can reach serve, the atenet router,
+# and other sessions' actors — which is what turns a leaked hand admin token
+# (F3) into cross-session compromise.
+#
+# Actors legitimately need: DNS, the atenet router (ingress from it, and egress
+# to it for the hand's federated MCP upstreams), and the internet (vendor LLM
+# APIs for the brain; git/package registries for the hand). They do NOT need
+# serve, the k8s API, or each other.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: actors-default-deny
+  namespace: agentplane
+spec:
+  podSelector:
+    matchExpressions:
+    - key: workload
+      operator: In
+      values: [agentplane-brain, agentplane-hand]
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: actors-allow
+  namespace: agentplane
+spec:
+  podSelector:
+    matchExpressions:
+    - key: workload
+      operator: In
+      values: [agentplane-brain, agentplane-hand]
+  policyTypes: [Ingress, Egress]
+  ingress:
+  # Only the router may reach an actor. Brain↔hand traffic is routed THROUGH
+  # atenet, so this covers the legitimate path without allowing actor↔actor.
+  - from:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: ate-system }
+  egress:
+  - to:                                   # DNS
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels: { k8s-app: kube-dns }
+    ports:
+    - { protocol: UDP, port: 53 }
+    - { protocol: TCP, port: 53 }
+  - to:                                   # the router (brain→hand MCP, actor→ingress)
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: ate-system }
+  - to:                                   # the internet: vendor APIs, git, registries
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8                      # no cluster-internal reach…
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.169.254/32              # …and no GCP metadata server (token theft)
+# NOTE: the internet rule is what the egress gateway (egress/, F9) replaces —
+# once actor traffic is forced through the proxy, this becomes "to the gateway
+# only" and destination allowlisting moves there.

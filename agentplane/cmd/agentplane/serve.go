@@ -130,6 +130,8 @@ type server struct {
 	vault    *vault          // credential vault (Secret Manager); nil when unconfigured
 	grantKey []byte          // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
 	emails   *emailAllowlist // self-service /v1/access: emails allowed to self-issue a token
+	owners   *ownerStore     // session → owning user (threat-model F1)
+	limiter  *accessLimiter  // throttles unauthenticated /v1/access (F7)
 }
 
 func runServe(args []string) {
@@ -171,8 +173,10 @@ func runServe(args []string) {
 		log:      logger,
 		wakeHist: wakeHist,
 		vault:    v,
-		grantKey: []byte(os.Getenv("HAND_ADMIN_TOKEN")), // shared with the hand admin plane
+		grantKey: grantSigningKey(),
 		emails:   emails,
+		owners:   newOwnerStore(env("BRAIN_TEMPLATE_NS", "agentplane")),
+		limiter:  newAccessLimiter(),
 	}
 
 	mux := http.NewServeMux()
@@ -380,6 +384,22 @@ func pathSession(w http.ResponseWriter, r *http.Request) (string, string, bool) 
 	return sid, naming.BrainActor(sid), true
 }
 
+// ownedSession is pathSession + the ownership check every session-scoped route
+// must pass (threat-model F1). A session owned by someone else answers 404,
+// exactly like a nonexistent one, so ids cannot be enumerated by probing.
+func (s *server) ownedSession(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	sid, brain, ok := pathSession(w, r)
+	if !ok {
+		return "", "", false
+	}
+	if s.tokens.enabled() && !s.owners.mine(sid, userOf(r)) {
+		s.log.Warn("session access denied", "session", sid, "user", userOf(r)) // audit
+		writeErr(w, http.StatusNotFound, "no such session")
+		return "", "", false
+	}
+	return sid, brain, true
+}
+
 // brainReq builds a trace-propagating request routed to a brain via atenet.
 func (s *server) brainReq(ctx context.Context, method, brain, path string, body io.Reader) *http.Request {
 	req, _ := http.NewRequestWithContext(ctx, method,
@@ -496,6 +516,10 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	// Grant the hand a scoped pull for this agent's declared credentials (if any).
 	// Best-effort: the session is usable without it; the hand just won't have the
 	// credential until re-granted. Must precede the first message.
+	// Claim ownership BEFORE anything else can touch the session (F1).
+	if err := s.owners.claim(r.Context(), sid, userOf(r)); err != nil {
+		s.log.Error("owner claim failed — session left unowned", "session", sid, "user", userOf(r), "err", err)
+	}
 	if err := s.grantHandCredentials(r.Context(), sid, userOf(r), in.Agent); err != nil {
 		s.log.Warn("hand credential grant failed", "session", sid, "err", err)
 	}
@@ -509,6 +533,8 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
+	// Only the caller's own sessions (F1). Filtering happens below, per actor.
+	me, filtering := userOf(r), s.tokens.enabled()
 	actors, err := listSessionActors(r.Context(), s.sc, "")
 	if err != nil {
 		s.fail(w, r, http.StatusBadGateway, "failed to list sessions", err)
@@ -525,6 +551,9 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	for _, a := range actors {
 		name := a.GetMetadata().GetName()
 		sid, _ := naming.SessionFromActor(name)
+		if filtering && !s.owners.mine(sid, me) {
+			continue // not yours — not listed (F1)
+		}
 		agent := a.GetActorTemplateName()
 		items = append(items, item{ID: sid, Agent: agent, Harness: harnesses[agent],
 			Status: derivedStatus(s.sc, name, a.GetStatus().String())})
@@ -533,7 +562,7 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
-	sid, brain, ok := pathSession(w, r)
+	sid, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}
@@ -574,7 +603,7 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
-	sid, brain, ok := pathSession(w, r)
+	sid, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}
@@ -582,7 +611,8 @@ func (s *server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadGateway, "failed to delete session", err)
 		return
 	}
-	s.log.Info("session deleted", "session", sid)
+	s.owners.release(r.Context(), sid) // forget ownership with the session (F1)
+	s.log.Info("session deleted", "session", sid, "user", userOf(r))
 	writeJSON(w, http.StatusOK, map[string]string{"deleted": sid})
 }
 
@@ -590,7 +620,7 @@ func (s *server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 // Same safe-suspend guard as the CLI: refuses mid-turn unless ?force=true
 // (finding #1 — a mid-turn checkpoint can wedge the turn).
 func (s *server) handleSessionSuspend(w http.ResponseWriter, r *http.Request) {
-	sid, brain, ok := pathSession(w, r)
+	sid, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}
@@ -621,7 +651,7 @@ func (s *server) handleSessionSuspend(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionKey sets/replaces the ephemeral BYO-key on an existing session.
 func (s *server) handleSessionKey(w http.ResponseWriter, r *http.Request) {
-	sid, brain, ok := pathSession(w, r)
+	sid, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}
@@ -675,7 +705,7 @@ func (s *server) putBrainKey(ctx context.Context, brain, apiKey string) error {
 }
 
 func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
-	sid, brain, ok := pathSession(w, r)
+	sid, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}
@@ -737,7 +767,7 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	_, brain, ok := pathSession(w, r)
+	_, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}
@@ -761,7 +791,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // handleStream proxies the brain's SSE stream, flushing per chunk. Cursor
 // resume: browser reconnects send Last-Event-ID; we forward it as ?since=.
 func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
-	_, brain, ok := pathSession(w, r)
+	_, brain, ok := s.ownedSession(w, r)
 	if !ok {
 		return
 	}

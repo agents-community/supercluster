@@ -1,0 +1,39 @@
+# HTTPS for the public endpoint (threat-model F2). Until this is applied,
+# bearer tokens and raw credentials (PUT /v1/credentials carries a PAT) cross
+# the internet in cleartext.
+#
+# Prereqs (one-time):
+#   1. A static IP + a DNS name you control. nip.io works for the IP-based host
+#      but a ManagedCertificate needs a REAL domain — use your own, e.g.
+#      agentplane.example.com → the ingress IP.
+#   2. Replace HOSTNAME below, apply, then wait for the cert to go Active:
+#      kubectl -n agentplane describe managedcertificate agentplane-cert
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: agentplane-cert
+  namespace: agentplane
+spec:
+  domains: [HOSTNAME]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentplane
+  namespace: agentplane
+  annotations:
+    networking.gke.io/managed-certificates: agentplane-cert
+    # Refuse cleartext outright rather than redirecting: a redirect still
+    # leaks the bearer token in the first request.
+    kubernetes.io/ingress.allow-http: "false"
+spec:
+  rules:
+  - host: HOSTNAME
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: agentplane-serve
+            port: { number: 7433 }

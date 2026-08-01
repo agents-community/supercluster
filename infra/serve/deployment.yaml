@@ -32,6 +32,15 @@ spec:
         - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
         # Hand gateway: the shared token serve uses to inject federated MCP
         # upstreams + credentials into a session's hand (/admin/upstreams).
+        # Grant-signing key — MUST differ from HAND_ADMIN_TOKEN (F3): that
+        # token is mounted into every hand, so reusing it would let sandboxed
+        # code forge grants for any user's credentials. Absent = grants
+        # disabled (fail closed), so create this Secret before enabling the
+        # vault: kubectl -n agentplane create secret generic agentplane-grant-key \
+        #   --from-literal=key=$(openssl rand -hex 32)
+        - name: AGENTPLANE_GRANT_KEY
+          valueFrom:
+            secretKeyRef: { name: agentplane-grant-key, key: key, optional: true }
         - name: HAND_ADMIN_TOKEN
           valueFrom: { secretKeyRef: { name: agentplane-hand-admin, key: token } }
         # Self-service access: emails allowed to self-issue a token via

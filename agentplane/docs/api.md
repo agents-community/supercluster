@@ -59,6 +59,15 @@ When token auth is enabled, every `/v1/*` route (except `/v1/access`) requires
 `Authorization: Bearer <token>`, and each token maps to a **user identity** —
 sessions and vault credentials are owned by that user.
 
+**Ownership is enforced, not advisory.** Whoever creates a session owns it;
+every session-scoped route checks that owner and answers `404 not_found` to
+anyone else (never `403`, so session ids can't be enumerated by probing).
+`GET /v1/sessions` lists only the caller's own. Ownership is recorded in the
+`agentplane-session-owners` ConfigMap and released when the session is deleted.
+
+`POST /v1/access` is rate-limited per client IP and per email (fixed one-minute
+window); exceeding it returns `429`.
+
 Tokens are self-service: `POST /v1/access {"email":"you@corp.com"}` returns
 the caller's personal token **iff the email is on the operator's allowlist**
 (a hot-reloaded file set via `AGENTPLANE_ALLOWED_EMAILS_FILE`; `#` comments

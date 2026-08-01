@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -52,8 +54,14 @@ func newVault(ctx context.Context, project string) (*vault, error) {
 }
 
 func (v *vault) parent() string { return "projects/" + v.project }
+// secretID maps (user, name) to a Secret Manager id. The user is HASHED, not
+// concatenated (threat-model F8): raw emails are neither id-safe (`@`, `.`)
+// nor unambiguous — "a" + "b-c" and "a-b" + "c" would collide — and hashing
+// also keeps user emails out of GCP resource names. `name` is validated by
+// credNameRe before it reaches here.
 func (v *vault) secretID(user, name string) string {
-	return fmt.Sprintf("agentplane-cred-%s-%s", user, name)
+	sum := sha256.Sum256([]byte(user))
+	return fmt.Sprintf("agentplane-cred-%s-%s", hex.EncodeToString(sum[:8]), name)
 }
 
 // put creates the secret (if absent) and adds a new version holding the payload.
@@ -132,6 +140,10 @@ func (s *server) handleCredPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if !credNameRe.MatchString(name) {
+		writeErr(w, http.StatusBadRequest, "invalid credential name (want lowercase letters, digits, hyphens)")
+		return
+	}
 	var p credPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&p); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")

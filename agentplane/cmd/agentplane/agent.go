@@ -109,6 +109,15 @@ func runKubectl(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(cctx, "kubectl", args...).CombinedOutput()
 }
 
+// runKubectlStdin is runKubectl with a body piped to stdin (`apply -f -`).
+func runKubectlStdin(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, kubectlTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "kubectl", args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.CombinedOutput()
+}
+
 // applyAgent applies a compiled template, enforcing create-not-replace:
 // ActorTemplate specs are IMMUTABLE — creating over an existing agent would
 // fail confusingly on apply, and replace-in-place is only safe with zero
