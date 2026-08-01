@@ -8,15 +8,48 @@ where the intended design differs from reality, both are shown.
 boundaries, plus an asset inventory and abuse cases. Diagrams are PlantUML
 committed beside this file so they diff in review:
 
-| Diagram | What it shows |
-|---|---|
-| [`c4-components.puml`](c4-components.puml) | every component, protocol, and authn mechanism across 6 trust boundaries |
-| [`seq-access-token.puml`](seq-access-token.puml) | email allowlist → personal bearer |
-| [`seq-vault-grant.puml`](seq-vault-grant.puml) | vault → HMAC grant → hand pull |
-| [`seq-byo-key.puml`](seq-byo-key.puml) | user's vendor key → actor memory → snapshot |
-| [`seq-hand-admin.puml`](seq-hand-admin.puml) | serve → hand `/admin/*` control plane |
-| [`seq-egress-injection.puml`](seq-egress-injection.puml) | egress credential injection — **designed vs deployed** |
-| [`seq-tool-call.puml`](seq-tool-call.puml) | a message end-to-end: brain → atenet → hand → tool |
+Rendered SVGs are committed beside each source so the docs site and GitHub
+show them without a PlantUML build; regenerate after editing a `.puml` with:
+
+```bash
+docker run --rm -v "$PWD":/data -w /data plantuml/plantuml -tsvg -o /data *.puml
+```
+
+### The system
+
+![Components, protocols and trust boundaries](c4-components.svg)
+
+Every arrow carries its protocol **and** its authentication mechanism; red
+marks where there is none. Source: [`c4-components.puml`](c4-components.puml).
+
+### Credential and token exchanges
+
+Each of these is a place where a secret changes hands — the flows worth
+attacking, drawn as deployed rather than as designed.
+
+**Self-service access — email allowlist to bearer token** ([source](seq-access-token.puml))
+
+![Access token issuance](seq-access-token.svg)
+
+**Credential vault to hand, via HMAC grant** ([source](seq-vault-grant.puml))
+
+![Vault grant flow](seq-vault-grant.svg)
+
+**Egress credential injection — designed vs deployed** ([source](seq-egress-injection.puml))
+
+![Egress injection](seq-egress-injection.svg)
+
+**Hand admin plane — one shared token for every hand** ([source](seq-hand-admin.puml))
+
+![Hand admin plane](seq-hand-admin.svg)
+
+**Bring-your-own vendor key into actor memory and snapshots** ([source](seq-byo-key.puml))
+
+![BYO key](seq-byo-key.svg)
+
+**A message end-to-end, with the controls that exist today** ([source](seq-tool-call.puml))
+
+![Tool call end to end](seq-tool-call.svg)
 
 ## 1. Assets
 
