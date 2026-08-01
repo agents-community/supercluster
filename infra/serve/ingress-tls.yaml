@@ -2,19 +2,29 @@
 # bearer tokens and raw credentials (PUT /v1/credentials carries a PAT) cross
 # the internet in cleartext.
 #
-# Prereqs (one-time):
-#   1. A static IP + a DNS name you control. nip.io works for the IP-based host
-#      but a ManagedCertificate needs a REAL domain — use your own, e.g.
-#      agentplane.example.com → the ingress IP.
-#   2. Replace HOSTNAME below, apply, then wait for the cert to go Active:
-#      kubectl -n agentplane describe managedcertificate agentplane-cert
+# Status:
+#   1. DONE — Cloud DNS zone `supercluster-dev` exists in this project, with
+#      A api.supercluster.dev -> 136.68.213.85 (the reserved `agentplane-ip`).
+#   2. TODO — register supercluster.dev and point the registrar's nameservers at:
+#        ns-cloud-a1.googledomains.com. ... a4
+#        (gcloud dns managed-zones describe supercluster-dev \
+#           --format='value(nameServers)')
+#   3. Apply this file, then watch the cert reach Active (~15-60 min):
+#        kubectl -n agentplane describe managedcertificate agentplane-cert
+#      A managed cert cannot provision until the domain resolves publicly, so
+#      step 2 must land first — applying earlier just parks it Provisioning.
+#   4. Verify BOTH: https:// works, and plain http:// is REFUSED (not
+#      redirected — a redirect still leaks the bearer token in request one).
+#   5. Rotate every token and stored credential afterwards: everything issued
+#      so far has crossed the internet in cleartext.
+#   6. Retire the nip.io host so no client silently keeps the cleartext path.
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata:
   name: agentplane-cert
   namespace: agentplane
 spec:
-  domains: [HOSTNAME]
+  domains: [api.supercluster.dev]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -28,7 +38,7 @@ metadata:
     kubernetes.io/ingress.allow-http: "false"
 spec:
   rules:
-  - host: HOSTNAME
+  - host: api.supercluster.dev
     http:
       paths:
       - path: /
