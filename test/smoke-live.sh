@@ -48,7 +48,7 @@ pass "session $sid"
 
 echo "== 5. send a turn =="
 curl -fsS -X POST "${auth[@]}" -H 'Content-Type: application/json' \
-  -d '{"text":"Run exactly this and tell me the output: echo agentplane-smoke-$((6*7))"}' \
+  -d '{"message":"Run exactly this and tell me the output: echo agentplane-smoke-$((6*7))"}' \
   "$AGENTPLANE_URL/v1/sessions/$sid/message" >/dev/null || fail "send"
 pass "message accepted"
 

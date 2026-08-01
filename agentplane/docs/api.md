@@ -24,7 +24,7 @@ agentplane serve -addr :7433
 | GET | `/v1/sessions/{id}` | session object; adds `busy/queued/last_event_at` when awake |
 | DELETE | `/v1/sessions/{id}` | cascade: escrow → delete actor → remove snapshots |
 | POST | `/v1/sessions/{id}/suspend` | checkpoint in place; `409` mid-turn unless `?force=true` |
-| POST | `/v1/sessions/{id}/message` | send a message (auto-wakes; retries 5xx wake races) |
+| POST | `/v1/sessions/{id}/message` | body `{"message":"…"}` (or an `events` array) → `202`; auto-wakes, retries 5xx wake races |
 | GET | `/v1/sessions/{id}/message` | persisted log, `?since=evt_…` cursor |
 | GET | `/v1/sessions/{id}/message/stream` | SSE; honors `Last-Event-ID` on reconnect; includes live `agent.message_delta` typing events |
 | PUT | `/v1/credentials/{name}` | store a credential in the vault (Secret Manager), scoped to the calling user |
