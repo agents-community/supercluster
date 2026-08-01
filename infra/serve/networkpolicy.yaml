@@ -1,4 +1,21 @@
-# Default-deny for the actor pools (threat-model F5). Model-generated code runs
+# Default-deny for the actor pools (threat-model F5).
+#
+# !! NOT APPLIED YET — see issue #25. A first attempt on 2026-08-01 broke DNS
+# for every actor (brain: "API Error: Unable to connect to API (ENOTIMP)") and
+# was rolled back within minutes. Two reasons, both now fixed below but NOT yet
+# re-validated on a canary:
+#   1. the pod label was wrong: pool pods carry `ate.dev/worker-pool`, not the
+#      `workload:` key from hand.yaml.tmpl (that one is WorkerPool metadata, so
+#      the policy silently selected ZERO pods on dry-run and everything on apply);
+#   2. this cluster runs GKE Dataplane V2 (Cilium, `anetd`) with NodeLocal
+#      DNSCache: pods resolve via the node-link-local 169.254.20.10, which
+#      Cilium classifies as HOST entity and `ipBlock: 0.0.0.0/0` does NOT match.
+#      Standard NetworkPolicy cannot express "allow host" — hence the explicit
+#      link-local rule below, and the CiliumNetworkPolicy alternative in #25.
+#
+# APPLY ONLY with a live canary: mint a throwaway session, send one turn, and
+# confirm the reply lands BEFORE walking away. Roll back with
+#   kubectl -n agentplane delete networkpolicy actors-default-deny actors-allow Model-generated code runs
 # in these sandboxes; without a policy it can reach serve, the atenet router,
 # and other sessions' actors — which is what turns a leaked hand admin token
 # (F3) into cross-session compromise.
@@ -16,9 +33,13 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-    - key: workload
+    # The worker pods that host actors. NOTE: this is the label Substrate
+    # actually puts on pool pods (`ate.dev/worker-pool`) — the `workload:` key
+    # in hand.yaml.tmpl is the WorkerPool's own metadata, not the pods', and
+    # selecting on it silently matches nothing.
+    - key: ate.dev/worker-pool
       operator: In
-      values: [agentplane-brain, agentplane-hand]
+      values: [brain-pool, hand-pool]
   policyTypes: [Ingress, Egress]
 ---
 apiVersion: networking.k8s.io/v1
@@ -29,9 +50,13 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-    - key: workload
+    # The worker pods that host actors. NOTE: this is the label Substrate
+    # actually puts on pool pods (`ate.dev/worker-pool`) — the `workload:` key
+    # in hand.yaml.tmpl is the WorkerPool's own metadata, not the pods', and
+    # selecting on it silently matches nothing.
+    - key: ate.dev/worker-pool
       operator: In
-      values: [agentplane-brain, agentplane-hand]
+      values: [brain-pool, hand-pool]
   policyTypes: [Ingress, Egress]
   ingress:
   # Only the router may reach an actor. Brain↔hand traffic is routed THROUGH
@@ -40,10 +65,15 @@ spec:
     - namespaceSelector:
         matchLabels: { kubernetes.io/metadata.name: ate-system }
   egress:
-  - to:                                   # DNS
+  - to:                                   # DNS via kube-dns pods (non-node-local path)
     - namespaceSelector: {}
       podSelector:
         matchLabels: { k8s-app: kube-dns }
+    ports:
+    - { protocol: UDP, port: 53 }
+    - { protocol: TCP, port: 53 }
+  - to:                                   # DNS via NodeLocal DNSCache (this cluster)
+    - ipBlock: { cidr: 169.254.20.10/32 }
     ports:
     - { protocol: UDP, port: 53 }
     - { protocol: TCP, port: 53 }
@@ -58,6 +88,8 @@ spec:
         - 172.16.0.0/12
         - 192.168.0.0/16
         - 169.254.169.254/32              # …and no GCP metadata server (token theft)
+        # NOTE: 169.254.20.10 (node-local DNS) is allowed by the explicit rule
+        # above; it must stay reachable or every actor loses name resolution.
 # NOTE: the internet rule is what the egress gateway (egress/, F9) replaces —
 # once actor traffic is forced through the proxy, this becomes "to the gateway
 # only" and destination allowlisting moves there.
