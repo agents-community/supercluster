@@ -1,4 +1,4 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: [build, -f, Dockerfile, -t, gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc:c5, .]
-images: [gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc:c5]
+  args: [build, -f, Dockerfile, -t, gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc:c6, .]
+images: [gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc:c6]
