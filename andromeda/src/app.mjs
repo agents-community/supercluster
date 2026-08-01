@@ -100,6 +100,54 @@ function Line({ line }) {
   }
 }
 
+// ── slash commands ───────────────────────────────────────────────────────────
+// Input starting with "/" is a command for the TUI, never a message to the
+// agent. A table, so new commands (like /usage) are one-line additions.
+const COMMANDS = {
+  sleep: {
+    desc: "suspend the mind (it wakes on your next message)",
+    run: ({ client, sessionId, append }) =>
+      client.suspend(sessionId)
+        .then(() => append({ kind: "info", text: "suspended — the mind sleeps in place (any message wakes it)" }))
+        .catch((e) => append({ kind: "error", text: `suspend: ${e.message}` })),
+  },
+  sessions: {
+    desc: "list your sessions for this agent",
+    run: async ({ client, agentName, sessionId, append }) => {
+      try {
+        const all = await client.sessions();
+        const mine = all.filter((s) => !agentName || s.agent === agentName);
+        if (!mine.length) return append({ kind: "info", text: "no sessions" });
+        for (const s of mine)
+          append({ kind: "info", text: `${s.id === sessionId ? "▸" : " "} ${s.id}  ${s.agent}  ${s.status}` });
+      } catch (e) {
+        append({ kind: "error", text: `sessions: ${e.message}` });
+      }
+    },
+  },
+  help: {
+    desc: "show available commands",
+    run: ({ append }) => {
+      for (const [name, c] of Object.entries(COMMANDS))
+        append({ kind: "info", text: `/${name} — ${c.desc}` });
+    },
+  },
+  quit: {
+    desc: "detach (the mind keeps living; esc does the same)",
+    run: ({ exit }) => exit(),
+  },
+};
+
+function runCommand(text, ctx) {
+  const name = text.slice(1).trim().split(/\s+/)[0].toLowerCase();
+  const cmd = COMMANDS[name];
+  if (!cmd) {
+    ctx.append({ kind: "info", text: `unknown command /${name} — try /help` });
+    return;
+  }
+  return cmd.run(ctx);
+}
+
 function Welcome({ cols }) {
   // Animate: shift the gradient every tick so the banner shimmers.
   const [t, setT] = useState(0);
@@ -114,7 +162,8 @@ function Welcome({ cols }) {
     ...banner,
     h(Box, { marginTop: 1 }, h(Text, { color: C.dim }, [
       "talk to it · ",
-      h(Text, { key: "s", color: C.amber }, "ctrl+s"), " to sleep it · ",
+      h(Text, { key: "s", color: C.amber }, "/sleep"), " to sleep it · ",
+      h(Text, { key: "h", color: C.violet }, "/help"), " for commands · ",
       h(Text, { key: "e", color: C.cyan }, "esc"), " to leave.",
     ])));
 }
@@ -149,13 +198,13 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
 
   const append = (line) => line && setLines((ls) => [...ls, line]);
 
+  const cmdCtx = { client, sessionId, agentName, append, exit };
+
   useInput((ch, key) => {
     if (key.escape) exit();
-    if (key.ctrl && ch === "s") {
+    if (key.ctrl && ch === "s") { // kept as a /sleep alias — no muscle-memory break
       setTimeout(() => setInput(""), 0); // TextInput also gets the key — clear it
-      client.suspend(sessionId)
-        .then(() => append({ kind: "info", text: "suspended — the mind sleeps in place (any message wakes it)" }))
-        .catch((e) => append({ kind: "error", text: `suspend: ${e.message}` }));
+      runCommand("/sleep", cmdCtx);
     }
   });
 
@@ -163,6 +212,7 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
     text = text.trim();
     if (!text || busy) return;
     setInput("");
+    if (text.startsWith("/")) { await runCommand(text, cmdCtx); return; }
     append({ kind: "user", text });
     setState("waking");
     try {
@@ -216,7 +266,7 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
       h(Box, {}, chip(agentName || "agent", C.blue), h(Text, { color: C.dim }, ` ${sessionId}`)),
       h(Text, { color: C.dim }, [
         h(Text, { key: "1", color: C.cyan }, "enter"), " send  ",
-        h(Text, { key: "2", color: C.amber }, "ctrl+s"), " sleep  ",
+        h(Text, { key: "2", color: C.violet }, "/help"), " commands  ",
         h(Text, { key: "3", color: C.pink }, "esc"), " detach",
       ])));
 }

@@ -22,11 +22,18 @@ export ANDROMEDA_TOKEN=…
 
 ## Keys while chatting
 
-| Key | Action |
+| Input | Action |
 |---|---|
 | Enter | send |
-| Ctrl+S | suspend — the mind checkpoints in place (any message wakes it) |
+| `/sleep` | suspend — the mind checkpoints in place (any message wakes it) |
+| `/sessions` | list your sessions for this agent |
+| `/help` | list all commands |
+| `/quit` | detach (Esc does the same) |
+| Ctrl+S | alias for `/sleep` |
 | Esc | detach — the mind keeps living; re-attach any time |
+
+Anything starting with `/` is a command for the TUI — it never reaches the
+agent.
 
 ## Development
 
