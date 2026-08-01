@@ -29,6 +29,16 @@ rules:
   resources: ["secrets"]
   resourceNames: ["agentplane-serve-tokens"]
   verbs: ["get", "update", "patch"]
+# Session ownership registry (threat-model F1): serve records which user owns
+# each session here. `create` needs no resourceName (the object may not exist
+# yet); every other verb is pinned to this one ConfigMap.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["agentplane-session-owners"]
+  verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

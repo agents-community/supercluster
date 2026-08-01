@@ -22,6 +22,25 @@ import (
 	"github.com/quantumnode/agentplane/internal/naming"
 )
 
+// grantTTL bounds how long a hand may redeem its grant (threat-model F4). The
+// hand pulls once, immediately after session create, so minutes is generous;
+// a grant leaked from actor memory or a checkpoint expires almost at once.
+// Grants are stateless (no revocation) — the short life IS the revocation.
+const grantTTL = 10 * time.Minute
+
+// grantSigningKey returns the HMAC key for grants (threat-model F3). It MUST
+// differ from HAND_ADMIN_TOKEN: that token is mounted into every hand, so
+// reusing it would let model-generated code that reads its own env forge a
+// grant for any user's credentials. AGENTPLANE_GRANT_KEY never leaves serve.
+// Absent, grants are disabled outright rather than silently insecure — a hand
+// then simply gets no credentials, which fails closed.
+func grantSigningKey() []byte {
+	if k := os.Getenv("AGENTPLANE_GRANT_KEY"); k != "" {
+		return []byte(k)
+	}
+	return nil
+}
+
 type grantClaims struct {
 	Sid   string   `json:"sid"`
 	User  string   `json:"user"`
@@ -37,6 +56,9 @@ func (s *server) signGrant(payload []byte) string {
 
 // mintGrant returns a signed token authorizing `names` for this session's user.
 func (s *server) mintGrant(sid, user string, names []string, ttl time.Duration) string {
+	if len(s.grantKey) == 0 {
+		return "" // no signing key configured — grants disabled (fail closed)
+	}
 	c := grantClaims{Sid: sid, User: user, Names: names, Exp: time.Now().Add(ttl).Unix()}
 	payload, _ := json.Marshal(c)
 	b64 := base64.RawURLEncoding.EncodeToString(payload)
@@ -45,6 +67,9 @@ func (s *server) mintGrant(sid, user string, names []string, ttl time.Duration) 
 
 func (s *server) verifyGrant(token string) (grantClaims, bool) {
 	var c grantClaims
+	if len(s.grantKey) == 0 || token == "" {
+		return c, false // grants disabled: nothing verifies
+	}
 	b64, sig, ok := strings.Cut(token, ".")
 	if !ok {
 		return c, false
@@ -106,7 +131,7 @@ func (s *server) grantHandCredentials(ctx context.Context, sid, user, agent stri
 	if err != nil || len(names) == 0 {
 		return err
 	}
-	grant := s.mintGrant(sid, user, names, 30*24*time.Hour)
+	grant := s.mintGrant(sid, user, names, grantTTL)
 	serveBase := env("AGENTPLANE_SELF_URL", "http://agentplane-serve.agentplane.svc:7433")
 	body, _ := json.Marshal(map[string]any{"serveBase": serveBase, "grant": grant, "credentials": names})
 

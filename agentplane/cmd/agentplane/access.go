@@ -13,11 +13,13 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
@@ -88,6 +90,57 @@ func (ts *tokenStore) add(token, user string) {
 
 // handleAccess exchanges an allowlisted email for a token (issuing one on first
 // request, returning the same one on repeat). Not wrapped in s.auth.
+// accessLimiter throttles the unauthenticated /v1/access endpoint
+// (threat-model F7): email alone is the credential there, so unbounded
+// attempts let an attacker sweep for allowlisted addresses. Fixed-window
+// counters per client IP and per email — small, dependency-free, and reset
+// on restart (serve is stateless by design).
+type accessLimiter struct {
+	mu     sync.Mutex
+	window time.Time
+	byIP   map[string]int
+	byMail map[string]int
+}
+
+const (
+	accessWindow   = time.Minute
+	accessPerIP    = 10 // attempts/min from one address
+	accessPerEmail = 5  // attempts/min for one email (legit use is once)
+)
+
+func newAccessLimiter() *accessLimiter {
+	return &accessLimiter{window: time.Now(), byIP: map[string]int{}, byMail: map[string]int{}}
+}
+
+// allow reports whether this attempt may proceed, rolling the window as needed.
+func (l *accessLimiter) allow(ip, email string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if time.Since(l.window) > accessWindow {
+		l.window = time.Now()
+		l.byIP = map[string]int{}
+		l.byMail = map[string]int{}
+	}
+	l.byIP[ip]++
+	l.byMail[email]++
+	return l.byIP[ip] <= accessPerIP && l.byMail[email] <= accessPerEmail
+}
+
+// clientIP prefers the LB's forwarded address over the socket peer.
+func clientIP(r *http.Request) string {
+	if f := r.Header.Get("X-Forwarded-For"); f != "" {
+		if i := strings.IndexByte(f, ','); i > 0 {
+			return strings.TrimSpace(f[:i])
+		}
+		return strings.TrimSpace(f)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func (s *server) handleAccess(w http.ResponseWriter, r *http.Request) {
 	if s.emails == nil || s.emails.count() == 0 {
 		writeErr(w, http.StatusServiceUnavailable, "self-service access is not enabled")
@@ -103,6 +156,11 @@ func (s *server) handleAccess(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if !emailRe.MatchString(email) {
 		writeErr(w, http.StatusBadRequest, "provide a valid email address")
+		return
+	}
+	if s.limiter != nil && !s.limiter.allow(clientIP(r), email) {
+		s.log.Warn("access rate-limited", "ip", clientIP(r), "email", email) // audit
+		writeErr(w, http.StatusTooManyRequests, "too many attempts — try again in a minute")
 		return
 	}
 	if !s.emails.allowed(email) {
