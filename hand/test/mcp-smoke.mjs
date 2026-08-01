@@ -77,6 +77,26 @@ try {
   const p = await client.callTool({ name: "bash", arguments: { command: "pwd" } });
   check("bash cwd is the sandbox workdir", (p.content?.[0]?.text ?? "").includes(WORKDIR));
 
+  // -- journal + idempotency advisory (issue #14) ---------------------------
+  const m1 = await client.callTool({ name: "bash", arguments: { command: "echo mutate >> j.txt" } });
+  check("first mutation carries no advisory", !(m1.content?.[0]?.text ?? "").includes("[hand] note"), m1.content?.[0]?.text);
+  const m2 = await client.callTool({ name: "bash", arguments: { command: "echo mutate >> j.txt" } });
+  check("identical mutation carries the advisory", (m2.content?.[0]?.text ?? "").includes("[hand] note: an identical bash call"), m2.content?.[0]?.text);
+  const jr = await client.callTool({ name: "bash", arguments: { command: "wc -l < .hand-journal.jsonl" } });
+  const jlines = (jr.content?.[0]?.text ?? "").split("\n")[1]?.trim();
+  check("journal recorded start+end per mutation", Number(jlines) >= 4, `journal lines: ${jlines}`);
+  const pure = await client.callTool({ name: "list", arguments: {} });
+  check("pure tools never carry advisories", !(pure.content?.[0]?.text ?? "").includes("[hand] note"));
+
+  // -- platform-enforced exactly-once: same logical call id never re-executes
+  const k1 = await client.callTool({ name: "bash", arguments: { command: "echo once >> once.txt; wc -l < once.txt" }, _meta: { toolUseId: "toolu_smoke_01" } });
+  const k2 = await client.callTool({ name: "bash", arguments: { command: "echo once >> once.txt; wc -l < once.txt" }, _meta: { toolUseId: "toolu_smoke_01" } });
+  check("same-id replay returns the stored result", (k2.content?.[0]?.text ?? "") === (k1.content?.[0]?.text ?? ""), `first=${JSON.stringify(k1.content?.[0]?.text)} second=${JSON.stringify(k2.content?.[0]?.text)}`);
+  const kc = await client.callTool({ name: "bash", arguments: { command: "wc -l < once.txt" } });
+  check("side effect happened exactly once", (kc.content?.[0]?.text ?? "").includes("1"), kc.content?.[0]?.text);
+  const k3 = await client.callTool({ name: "bash", arguments: { command: "echo once >> once.txt; wc -l < once.txt" }, _meta: { toolUseId: "toolu_smoke_02" } });
+  check("new id with same content executes again", (k3.content?.[0]?.text ?? "").includes("2"), k3.content?.[0]?.text);
+
   // -- admin surface is actually gated --------------------------------------
   const noAuth = await fetch(`http://127.0.0.1:${PORT}/admin/upstreams`, { method: "POST", body: "{}" });
   check("admin rejects missing bearer", noAuth.status === 401 || noAuth.status === 403, `status ${noAuth.status}`);
