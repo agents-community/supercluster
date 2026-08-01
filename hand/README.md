@@ -33,10 +33,16 @@ ingests with the actor's labels and retains after the hand is gone. That
 stdout copy is the operator audit trail: it records what was *actually
 executed*, not just what the model intended.
 
-An identical mutation arriving within 10 minutes still executes, but its
-result carries an advisory ("an identical call completed Ns ago") so the
-model can recognize a possible retry-after-lost-response before doubling a
-side effect. Never silent dedup — the model decides. Pure tools
+Idempotency is **platform-enforced, keyed by the logical call id**: when a
+tool call carries an id (MCP `_meta` tool-use id / progress token), a
+re-arrival of the *same id* replays the stored result without re-executing —
+exactly-once per model decision, guaranteed by the hand, no model cooperation
+involved. Errors are remembered too: a same-id replay of a failed call gets
+the recorded error, never a blind re-execution against unknown state.
+
+A *new* id with identical content is a fresh model decision: it executes, and
+the result carries an advisory ("an identical call completed Ns ago") so the
+model can recognize a possible retry-after-lost-response. Pure tools
 (`read`/`list`/`grep`/`glob`) skip all of this.
 
 ## Observability
