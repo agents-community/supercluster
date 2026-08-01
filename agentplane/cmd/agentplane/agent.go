@@ -400,6 +400,12 @@ func createSession(ctx context.Context, sc sessionCtx, agent string) (string, er
 				Actor: &ateapipb.ObjectRef{Atespace: sc.atespace, Name: naming.BrainActor(sid)}})
 			return "", fmt.Errorf("create hand actor: %w", err)
 		}
+		// Tell the hand who it is: the actor has no ambient identity (no env,
+		// no hostname, and the routed hop drops the Host header), so span
+		// attribution depends on this push. Best-effort like the rest.
+		if err := pushHandIdentity(ctx, sc, sid); err != nil {
+			log.Printf("warn: push hand identity for %s: %v", sid, err)
+		}
 		// Hand-as-gateway: federate the agent's OWN MCP servers through the hand
 		// (with any credentials) so the brain — which connects only to the hand —
 		// sees those tools too. Best-effort: on failure the hand still serves its
@@ -496,6 +502,49 @@ func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent string) 
 			resp.Body.Close()
 			if resp.StatusCode >= 400 {
 				return fmt.Errorf("hand rejected upstreams: HTTP %d", resp.StatusCode)
+			}
+			return nil
+		}
+		if resp != nil {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt < 4 {
+			select {
+			case <-time.After(3 * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return lastErr
+}
+
+// pushHandIdentity tells the freshly created hand which session it belongs to
+// via its admin plane — the actor itself has no ambient identity, and span
+// attribution (hand.tool → agentplane.session) depends on it. Same wake-race
+// retry shape as the other admin pushes.
+func pushHandIdentity(ctx context.Context, sc sessionCtx, sid string) error {
+	hand := naming.HandActor(sid)
+	body, _ := json.Marshal(map[string]string{"session": sid, "actor": hand})
+	url := fmt.Sprintf("http://%s/admin/identity", sc.atenet)
+	adminTok := env("HAND_ADMIN_TOKEN", "")
+
+	var lastErr error
+	for attempt := 1; attempt <= 4; attempt++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		req.Host = naming.ActorDNS(hand, sc.atespace)
+		req.Header.Set("Content-Type", "application/json")
+		if adminTok != "" {
+			req.Header.Set("Authorization", "Bearer "+adminTok)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil && resp.StatusCode < 500 {
+			resp.Body.Close()
+			if resp.StatusCode >= 400 {
+				return fmt.Errorf("hand rejected identity: HTTP %d", resp.StatusCode)
 			}
 			return nil
 		}

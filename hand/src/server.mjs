@@ -250,6 +250,17 @@ const server = http.createServer(async (req, res) => {
     if (!adminAuthed(req)) { res.writeHead(401); return res.end("unauthorized"); }
     try {
       if (url.pathname === "/admin/upstreams" && req.method === "POST") return await handleAdminUpstreams(req, res);
+      if (url.pathname === "/admin/identity" && req.method === "POST") {
+        // serve pushes who we are at session create — the actor itself has no
+        // ambient identity (no env, no hostname, Host doesn't survive routing).
+        const body = await readJson(req);
+        if (typeof body.session === "string" && /^sess-[a-z0-9]+$/.test(body.session)) {
+          SESSION_ID = body.session;
+          ACTOR_NAME = typeof body.actor === "string" ? body.actor : `h-${body.session}`;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ ok: true, session: SESSION_ID }));
+      }
       if (url.pathname === "/admin/grant" && req.method === "POST") {
         const applied = await pullCredentials(await readJson(req));
         res.writeHead(200, { "content-type": "application/json" });

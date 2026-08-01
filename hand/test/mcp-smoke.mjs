@@ -81,6 +81,22 @@ try {
   const noAuth = await fetch(`http://127.0.0.1:${PORT}/admin/upstreams`, { method: "POST", body: "{}" });
   check("admin rejects missing bearer", noAuth.status === 401 || noAuth.status === 403, `status ${noAuth.status}`);
 
+  // -- identity push (issue #2: spans need agentplane.session) --------------
+  const idPush = await fetch(`http://127.0.0.1:${PORT}/admin/identity`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-admin", "Content-Type": "application/json" },
+    body: JSON.stringify({ session: "sess-smoketest1", actor: "h-sess-smoketest1" }),
+  });
+  const idBody = await idPush.json().catch(() => ({}));
+  check("admin identity push accepted", idPush.status === 200 && idBody.session === "sess-smoketest1", JSON.stringify(idBody));
+  const badPush = await fetch(`http://127.0.0.1:${PORT}/admin/identity`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-admin", "Content-Type": "application/json" },
+    body: JSON.stringify({ session: "../etc/passwd" }),
+  });
+  const badBody = await badPush.json().catch(() => ({}));
+  check("identity push rejects malformed session", badBody.session === "sess-smoketest1", JSON.stringify(badBody));
+
   await client.close();
 } catch (err) {
   check("smoke run completed", false, String(err));
