@@ -77,11 +77,17 @@ andromeda                           # list everything, then pick
 
 **While chatting**
 
-| Key | Does |
+| Input | Does |
 |-----|------|
 | **enter** | send your message |
-| **ctrl+s** | suspend the mind in place (frees resources; wakes on your next message) |
+| **/sleep** | suspend the mind in place (frees resources; wakes on your next message) |
+| **/sessions** | list your sessions for this agent |
+| **/help** | list all commands |
+| **/quit** | detach (esc works too) |
 | **esc** | detach — the mind keeps its full memory; re-attach any time |
+
+Anything you type starting with `/` is a TUI command, never sent to the agent
+(ctrl+s still works as a `/sleep` alias).
 
 When you detach, Andromeda prints the exact command to come back to that mind.
 
