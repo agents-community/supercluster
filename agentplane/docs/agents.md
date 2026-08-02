@@ -72,6 +72,48 @@ session setup. Hand-role agents are hidden from `GET /v1/agents`.
 Curated starting points live in [`examples/`](../examples/): `starter.yaml`
 (claude-code, split-agent, git-capable), `codex.yaml`, `pi.yaml`.
 
+## Egress policy & credential injection
+
+> **Declarative today, not yet enforced.** These fields validate and compile
+> onto the template so serve can render a gateway policy per session, but the
+> egress gateway is not deployed ([`egress/`](../../../egress/), threat-model
+> F9) — actor egress is still unrestricted in practice. Declaring a policy
+> documents intent; it does not yet constrain anything.
+
+```yaml
+egress:
+  mode: limited                 # unrestricted (default) | limited
+  allowedHosts: [github.com, api.github.com]
+credentials:
+  - name: gh-token
+    inject:
+      hosts: [github.com]       # which destinations receive the secret
+      location: {header: true}  # header and/or body — never the URL path
+```
+
+`credentials: [gh-token]` (a bare name) still works and means "no injection" —
+the legacy path where the hand pulls the value into actor memory.
+
+**Reachability and credential scope are separate.** `egress.allowedHosts` says
+which destinations are reachable; `inject.hosts` says which receive the
+secret. A host must be in **both** — being reachable never implies being
+trusted with a credential, and injecting into a host outside the allowlist is
+rejected at create rather than silently doing nothing.
+
+Three limits worth knowing before you write a policy:
+
+- **The URL path is never injected.** Path-secret endpoints (Slack incoming
+  webhooks) can't be used this way — prefer header auth.
+- **`location` should stay header-only unless you need otherwise.** Request
+  bodies are assembled from content the agent is working with, so body
+  injection is the wider exposure surface.
+- **Clients that validate key format locally will break** once injection is
+  live: they see an opaque placeholder, not a real key, and can fail before
+  making any network call.
+
+Hosts are plain hostnames — a scheme, port, or path is rejected, since those
+are the usual ways an allowlist entry looks right and matches nothing.
+
 ## Durable workspace
 
 ```yaml

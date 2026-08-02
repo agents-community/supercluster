@@ -23,4 +23,14 @@ turnDeadlineSeconds: 600
 # For a PRIVATE repo, store a git token (`PUT /v1/credentials/gh-token`) and
 # uncomment — the hand pulls it for the clone; it never enters this spec or the
 # brain. Public repos need nothing here.
-credentials: [gh-token]
+# Egress policy — declarative today (the gateway isn't deployed yet; see
+# egress/ and threat-model F9). Documents where this agent may talk and which
+# credential is injected where, so the sandbox never holds the value.
+egress:
+  mode: limited
+  allowedHosts: [github.com, api.github.com]
+credentials:
+  - name: gh-token
+    inject:
+      hosts: [github.com]
+      location: {header: true}
