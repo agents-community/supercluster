@@ -155,14 +155,63 @@ for all inputs.
 **Fix:** hash or length-prefix the components; validate `name` against a strict
 charset.
 
-### F9 — MEDIUM — Egress credential injection is unbuilt and **untested on-cluster**
+### F9 — MEDIUM — Egress credential injection: API declared, gateway unbuilt
 *Design gap.* [`egress/`](../../../egress/) passes as a **local Docker proof
 only** — verified: zero egress pods in the cluster. Today's reality is the path
-F3/F6 describe: credentials are copied *into* the sandbox. Every claim about
-"secretless" applies to the target state, not the deployment.
+F3/F6 describe: credentials are copied *into* the sandbox.
 
-**Fix:** the v1 deployment tracked in the egress module README; until then the
-docs must not imply it is live (this file is the correction).
+**Update (#29 / #30):** the AgentSpec now carries an egress policy — `egress.mode`
++ `allowedHosts` for reachability, and `credentials[].inject` binding a
+credential to the destinations that receive it. It validates, compiles onto the
+ActorTemplate, and is **inert**: no gateway consumes it, so declaring a policy
+constrains nothing. Two layers are enforced at *create* time (a host must be
+both reachable and trusted with the secret) so a policy can't silently match
+nothing — but that is input validation, not runtime containment.
+
+Remaining chain: serve renders the policy per session → gateway actor
+(`e-<sid>`) → traffic actually forced through it (F11) → `egress_gateway_address`
+wired, which Substrate leaves unproduced.
+
+**Fix:** deploy the gateway. Until then the docs must not imply the sandbox is
+secretless — this file and `docs/agents.md` both carry that correction.
+
+### F11 — HIGH — Proxy enforcement via `HTTPS_PROXY` is bypassable by the code it contains
+*Elevation of privilege / design gap.* The v1 proof routes egress by setting
+`HTTPS_PROXY` in the hand and trusting the proxy's CA. That is a **cooperative**
+control: model-generated code running in that same sandbox can `unset
+HTTPS_PROXY`, pass `--noproxy`, or open a raw socket, and its traffic leaves via
+the worker's normal NAT path — unfiltered, unlogged, and unaffected by any
+allowlist. The proof demonstrates that injection *works*; it does not
+demonstrate that egress is *contained*.
+
+This matters because the threat being mitigated is precisely "the agent does
+something we didn't intend" — an enforcement mechanism the agent can switch off
+does not mitigate it.
+
+**Fix:** enforce below the sandbox, where the actor cannot reach the control —
+Substrate's `atunnel` does exactly this (nftables redirect on the host,
+mTLS to the gateway, authenticated actor identity headers). Treat
+`HTTPS_PROXY` as a development convenience only, and never as the production
+containment boundary.
+
+### F12 — LOW — Placeholder credentials are a deliberate, smaller exposure
+*Information disclosure (accepted trade-off).* Pure injection assumes the
+sandbox sends an *uncredentialed* request the gateway then authenticates. Many
+real clients won't: `git` will not attempt Basic auth with no credential
+configured, and most CLIs read a key from the environment before making any
+call. Supporting them requires an **opaque placeholder** inside the sandbox
+which the gateway swaps for the real secret at egress (the approach Anthropic's
+Managed Agents uses for `environment_variable` credentials).
+
+The placeholder is a real string the agent can read and exfiltrate — so this is
+weaker than holding nothing, but far stronger than F6 (the placeholder is
+useless anywhere except through the gateway, which decides whether the caller
+and destination are entitled to the real value). Known side effect: clients
+that validate key *format* locally fail before any network call.
+
+**Fix:** support both modes — placeholder where the client demands one, pure
+injection everywhere else — and prefer the latter. Never inject into the URL
+path (Slack-style path-secret webhooks are out of scope by design).
 
 ### F10 — LOW — `InsecureSkipVerify` to ateapi
 *Spoofing.* `session.go:58` disables TLS verification to the Substrate control
@@ -245,3 +294,5 @@ failure there defeats our controls:
 1. **F2 (TLS)** and **F1 (session ownership)** — before any external tester. Both are small.
 2. **F5 (NetworkPolicy)** and **F4 (grant TTL)** — cheap, big blast-radius reduction.
 3. **F3 (key separation)** then **F9 (egress injection)** — the structural fixes; F9 subsumes F6.
+4. When building F9, enforce via **atunnel, not `HTTPS_PROXY`** (F11) — otherwise the
+   containment is one `unset` away from being nothing.
