@@ -188,6 +188,58 @@ an in-cluster MITM — but it defeats the mTLS that upstream just added.
 5. **Snapshot-bucket reader replays a mind** — reads conversations and keys (F6).
 6. **Prompt injection from a fetched web page** steering tool calls — mitigated only by tool policy + sandbox; the egress allowlist (F9) is the real containment.
 
+## 5. Alignment with Substrate's own threat model
+
+Substrate published [`docs/threat-model.md`](https://github.com/agent-substrate/substrate/blob/main/docs/threat-model.md)
+in [PR #559](https://github.com/agent-substrate/substrate/pull/559) (the atunnel
+work, already in our pinned base). It was written independently of this
+document, which makes the overlap evidence rather than coincidence.
+
+**It validates our findings.** Their Critical-rated threats map onto ours:
+
+| Their threat (priority) | Ours |
+|---|---|
+| "Malicious actor gains access to other actors via network" — *policies must deny ingress and egress by default* (Critical) | **F5** |
+| "…via node-local endpoints exposed on the network (e.g. instance metadata)" (Critical) | **F5** — our policy blocks `169.254.169.254` |
+| "…via Kubernetes APIs — **strong preference on blocking actor access**" (Critical) | **F5** |
+| "Malicious actor gains access to snapshots of other actors and steals data" + *avoid snapshotting sensitive credentials* (Critical) | **F6** |
+| "Tricks Substrate identity broker into returning credentials for a different actor" — *tie claims to actor/worker, validate on use* (Critical) | **F3** — our grants are HMAC+exp only, unbound to the caller |
+| "Improper handling of Secrets — ensure an official, secure way to pass secret data to actors" (High) | **F3 / F6** |
+
+**It prescribes our egress module by name.** Their highest agent-specific
+threat is one only an agent platform has:
+
+> *"Agent leaks credentials exposed in sandbox, because LLMs are unreliable.
+> Due to prompt injection or just agent silliness."* (High)
+>
+> **Mitigating invariant:** *"Credentials are not exposed in sandboxes by default."*
+>
+> **Suggested mitigation:** *"Opt-in to credentials, none by default.
+> **Credential injecting proxy (injects tokens or terminates TLS and holds
+> x509 private key on behalf of sandbox).**"*
+
+That is precisely [`egress/`](../../../egress/), arrived at independently. It
+promotes **F9** from "our differentiator" to "the mitigation the platform's own
+security analysis calls for" — and the *GitHub Issue* column is empty
+throughout their table, so none of it appears claimed yet.
+
+### What they cover that we do not
+
+Substrate-layer concerns we inherit rather than own, tracked here because a
+failure there defeats our controls:
+
+- **Worker reuse** — all actor state (process, filesystem, env, network policy)
+  must be reset between actors sharing a worker; they call out stale-policy
+  races explicitly.
+- **Snapshot integrity** — corrupt or attacker-written snapshots must be
+  verified before restore; we treat snapshots as trusted today.
+- **Actor self-modification** — an actor reading or writing its own snapshot;
+  their fix is separate credentials for snapshot access.
+- **Cluster DNS exposure** — actors can enumerate internal topology; they
+  recommend not exposing Substrate-internal DNS to actors at all.
+- **Actor-creation quotas** — fork-bomb style resource exhaustion. Relevant to
+  us as soon as testers can create sessions freely.
+
 ## 5. What to fix first
 
 1. **F2 (TLS)** and **F1 (session ownership)** — before any external tester. Both are small.
