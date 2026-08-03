@@ -1,8 +1,22 @@
 # Threat model
 
-**Scope:** the whole agentplane platform as *deployed today* (2026-08-01),
+**Scope:** the whole agentplane platform as *deployed today* (2026-08-03),
 not as designed. Every claim below cites the code or a live cluster check;
 where the intended design differs from reality, both are shown.
+
+**Status at a glance.** Findings are marked FIXED / PARTIAL / OPEN against the
+running cluster, not against merged code — the distinction matters, because F10
+is fixed in code and still inactive in production for want of one env var.
+
+| | |
+|---|---|
+| FIXED | F1, F3, F4, F7, F8 |
+| PARTIAL | F5 (ingress only), F10 (code merged, not enabled) |
+| OPEN | F2, F6, F9, F11, F12 |
+
+Code is cited by *function*, not line number: every line-number citation in the
+first revision of this document had drifted within two days and pointed at
+unrelated code, which is worse than no citation at all.
 
 **Method:** STRIDE per element over a data-flow diagram with explicit trust
 boundaries, plus an asset inventory and abuse cases. Diagrams are PlantUML
@@ -61,34 +75,49 @@ attacking, drawn as deployed rather than as designed.
 | Memory snapshots | GCS `gs://…/agentplane/` | **contain conversation + BYO key + pulled credentials** — the highest-value asset |
 | Transcripts (escrow) | GCS `gs://…/transcripts/` | conversation disclosure |
 | Execution journal | actor `/workspace` + Cloud Logging | reveals commands run (by design — it is the audit trail) |
-| Grant-signing key = `HAND_ADMIN_TOKEN` | k8s Secret, env in serve **and every hand** | forge grants for any user/credential (see F3) |
+| Grant-signing key | k8s Secret `agentplane-grant-key`, env in **serve only** | forge grants for any user/credential — no longer shared with hands (F3 fixed) |
+| Hand admin token | k8s Secret `agentplane-hand-admin`, env in every hand | drive another session's hand admin plane |
+| Session metadata | **Firestore** `sessions/{sid}` — owner, agent, version pin, activity, usage | maps sessions to the people who own them; reveals who ran what and what it cost |
+| Agent definitions + version history | **Firestore** `agents/{name}/versions/{n}` — the submitted spec, verbatim | system prompts and tool policy; a writer could point new sessions at an attacker-authored agent |
+| Lifetime spend per user | **Firestore** `usage/{email}` | billing/usage disclosure, keyed by email |
 
 ## 2. Trust boundaries
 
 1. **Internet ↔ LB** — `http://136.68.213.85.nip.io`, **no TLS** (verified: ingress `tls: NONE`)
 2. **LB ↔ serve** — in-cluster HTTP
-3. **serve ↔ Substrate control plane** — gRPC/TLS with `InsecureSkipVerify: true` (`session.go:58`)
+3. **serve ↔ Substrate control plane** — gRPC/TLS. `ateapiTLS()` verifies against
+   `AGENTPLANE_ATEAPI_CA` when set and warns loudly when not; **the deployment does
+   not set it**, so verification is off in practice (F10)
 4. **worker ↔ actor** — gVisor sandbox: *the* boundary against model-generated code
-5. **actor ↔ actor / actor ↔ serve** — atenet (Envoy), Host-header routed; **no NetworkPolicies exist** (verified)
+5. **actor ↔ actor / actor ↔ serve** — atenet (Envoy), Host-header routed.
+   Substrate now ships per-pool NetworkPolicies (`substrate-brain-pool-*`,
+   `substrate-hand-pool-*`) — **`policyTypes: [Ingress]` only**, admitting just
+   `atenet-router`. Actor-to-actor *inbound* is therefore closed; **egress is
+   entirely unrestricted** (F5)
 6. **cluster ↔ GCP + vendor APIs** — Workload Identity; actor egress NAT'd behind the worker IP
 
 ## 3. Findings
 
 Ranked severity × likelihood. Filed: **F1 → #19**, **F2 → #20**, **F3/F4 → #21**, **F5 → #22**.
 
-### F1 — CRITICAL — No per-session ownership: any token reads/writes any session
-*Spoofing / Information disclosure / Tampering.* `pathSession` (`serve.go:374`)
+### F1 — CRITICAL — **FIXED** — No per-session ownership: any token reads/writes any session
+*Spoofing / Information disclosure / Tampering.* `pathSession()`
 validates the id's **shape** and nothing else; `handleSessionGet/Send/Delete/
 Suspend` never compare the session to `userOf(r)`. `handleSessionList`
-(`serve.go:511`) lists **all** sessions cluster-wide. The authenticated user
+(`handleSessionList()`) listed **all** sessions cluster-wide. The authenticated user
 label is used only for vault namespacing and log attribution.
 
 > Any allowlisted tester can enumerate every session, read other people's
 > conversations, inject messages into them, and delete them. With ~10 testers
 > this is a live multi-tenancy hole, not a theoretical one.
 
-**Fix:** stamp an owner on session creation (actor label/annotation) and enforce
-it in `pathSession`; filter `handleSessionList` by owner. Deny by default.
+**Fixed.** `ownedSession()` gates every session-scoped route and answers **404,
+not 403**, so ids cannot be enumerated by probing for the difference; the list is
+filtered by owner. Ownership was first held in a ConfigMap and now lives in
+Firestore (`sessions/{sid}.owner`), which removed that store's 1 MiB ceiling and
+its lost-update race — a dropped owner locked the creator out of their own
+session. Claims are create-only, so a claim can never reassign ownership.
+Unowned sessions remain operator-only, so a store outage can only ever deny.
 
 ### F2 — CRITICAL — Cleartext HTTP on the public endpoint
 *Information disclosure.* The ingress has no TLS, and `ONBOARDING.md` hands
@@ -99,8 +128,8 @@ unencrypted; `POST /v1/access` returns a token in cleartext.
 **Fix:** managed cert + HTTPS redirect before any external tester uses it; treat
 every token/credential issued over HTTP as compromised and rotate.
 
-### F3 — HIGH — One shared secret is both the hand admin token and the grant-signing key
-*Elevation of privilege.* `grantKey = HAND_ADMIN_TOKEN` (`serve.go:174`), and the
+### F3 — HIGH — **FIXED** — One shared secret is both the hand admin token and the grant-signing key
+*Elevation of privilege.* `grantKey = HAND_ADMIN_TOKEN` (as originally built), and the
 same value is mounted into **every** hand actor (`agentplane-hand-admin`). A
 single compromised hand — i.e. any session where model-generated code reads its
 own env — yields the key that **signs grants**. Since `verifyGrant` checks only
@@ -108,26 +137,58 @@ the HMAC and `exp`, the holder can mint a grant for *any* user and *any*
 credential name and pull it from `/v1/hand/credentials/{name}` (that route is
 deliberately not behind `s.auth` — the grant *is* the auth).
 
-**Fix:** separate keys (grant-signing key never leaves serve); per-session hand
-admin tokens; bind grants to the presenting actor's identity (Substrate
-`ActorIdentity` mTLS) so a stolen grant is useless from elsewhere.
+**Fixed (partly).** The keys are separate secrets — `grantSigningKey()` reads
+`AGENTPLANE_GRANT_KEY` (Secret `agentplane-grant-key`, mounted into serve only)
+while hands get `agentplane-hand-admin`. Verified distinct on the deployment. A
+compromised hand therefore no longer yields the grant-signing key.
 
-### F4 — HIGH — 30-day grant TTL
+**Still outstanding:** the hand admin token is one value shared by every hand, so
+a compromised hand can still drive *another* session's hand admin plane, and
+grants are not bound to the presenting actor. Binding them to Substrate
+`ActorIdentity` mTLS remains the endgame — a stolen grant would then be useless
+from anywhere else.
+
+### F4 — HIGH — **FIXED** — 30-day grant TTL
 *Elevation of privilege.* `mintGrant(sid, user, names, 30*24*time.Hour)`
-(`grant.go:109`). A grant leaked from actor memory, a checkpoint, or a log stays
+(`mintGrant()`, as originally built). A grant leaked from actor memory, a checkpoint, or a log stays
 redeemable for a month, and there is **no revocation** (stateless by design).
 
-**Fix:** minutes-long TTL (the hand pulls once at session start), plus a
-revocation list or key rotation; re-mint on resume instead of long life.
+**Fixed.** `grantTTL = 10 * time.Minute`. The hand pulls once at session setup,
+so a short life costs nothing; a grant leaked from actor memory or a checkpoint
+is dead within ten minutes instead of a month. Revocation is still absent by
+design (grants are stateless) — now an accepted risk rather than an open one,
+because the TTL bounds it.
 
-### F5 — HIGH — No NetworkPolicy: any actor can reach serve and every other actor
-*Elevation of privilege / lateral movement.* Verified: zero NetworkPolicies in
-the cluster. Model-generated code in a hand can reach `agentplane-serve:7433`,
-the atenet router, other sessions' actors, and the k8s API network. Combined
-with F3 (shared admin token) one session can drive another session's hand.
+### F5 — HIGH → MEDIUM — **PARTIAL** — Actor egress is unrestricted
+*Elevation of privilege / lateral movement.*
 
-**Fix:** default-deny egress/ingress NetworkPolicies per pool; actors should
-reach only atenet, and only for their pair.
+**This finding's original claim — "zero NetworkPolicies in the cluster" — is no
+longer true.** The Substrate upgrade brought per-pool policies
+(`substrate-brain-pool-*`, `substrate-hand-pool-*`), verified present and
+selecting the pool pods by `ate.dev/worker-pool`.
+
+What they cover: `policyTypes: [Ingress]`, admitting only `atenet-router` from
+`ate-system`. So an actor can no longer be *reached* by another actor or by an
+arbitrary pod — the lateral-movement half is closed, and closed below us, by the
+platform rather than by our manifest.
+
+What remains: those policies declare **no egress rules at all**, so
+model-generated code in a hand can still open outbound connections to
+`agentplane-serve:7433`, the atenet router, other sessions' actors, the k8s API
+network, and the GCP metadata server. Combined with the still-shared hand admin
+token (F3), one session can reach another session's hand admin plane — it just
+has to initiate the connection itself.
+
+Our own `infra/serve/networkpolicy.yaml` covers egress and is deliberately
+**unapplied**: a first attempt broke DNS for every actor (wrong pod label, plus
+Dataplane V2 + NodeLocal DNSCache resolving via a link-local address that
+`ipBlock: 0.0.0.0/0` does not match). Both causes are fixed in the file and
+neither is re-validated. See #22 / #25.
+
+**Fix:** apply the egress half behind a live canary — mint a throwaway session,
+send one turn, confirm the reply lands *before* walking away. Deny the metadata
+server explicitly; it is the one destination that turns egress into credential
+theft.
 
 ### F6 — MEDIUM — Snapshots contain live secrets
 *Information disclosure.* Documented already for BYO keys, but now also true of
@@ -137,23 +198,31 @@ Anyone with bucket read gets user PATs.
 **Fix:** CMEK + tight bucket IAM today; the real fix is F9 (egress injection, so
 the sandbox never holds credentials).
 
-### F7 — MEDIUM — `/v1/access` is unauthenticated and unthrottled
+### F7 — MEDIUM — **FIXED** — `/v1/access` is unauthenticated and unthrottled
 *Spoofing / DoS.* No rate limiting (`access.go`). An attacker who guesses or
 learns an allowlisted email gets that user's token — and because the endpoint is
 idempotent, the **same** token the legitimate user already holds. Email is
 therefore a single-factor credential.
 
-**Fix:** rate-limit per IP/email; prefer a one-time link or IdP (OIDC) over
-"email in a JSON body"; log + alert on repeated denials (denials are logged).
+**Fixed (the throttle).** `accessLimiter` caps issuance at 10/min per IP and
+5/min per email, so the endpoint can no longer be ground through at speed.
 
-### F8 — MEDIUM — Vault secret ids are ambiguously concatenated
-*Tampering.* `secretID = "agentplane-cred-<user>-<name>"` (`vault.go:55`) with no
+**Unchanged by design:** email remains a single factor, and the endpoint is still
+idempotent, so anyone who learns an allowlisted address gets that user's token.
+An IdP (OIDC) or a one-time link is the real fix; the rate limit buys time, it
+does not change the trust model. Treat the allowlist as a *convenience for a
+closed tester group*, never as authentication.
+
+### F8 — MEDIUM — **FIXED** — Vault secret ids are ambiguously concatenated
+*Tampering.* `secretID = "agentplane-cred-<user>-<name>"` (`vault.secretID()`, as originally built) with no
 delimiter escaping: user `a` + name `b-c` collides with user `a-b` + name `c`.
 Emails contain `.` and `@`, so the id is also not obviously Secret-Manager-safe
 for all inputs.
 
-**Fix:** hash or length-prefix the components; validate `name` against a strict
-charset.
+**Fixed.** `vault.secretID()` hashes the user into a fixed-width prefix —
+`agentplane-cred-<sha256(user)[:8] hex>-<name>` — so the user segment can no
+longer run into the name segment, and an email's `.`/`@` never reach the secret
+id. Collisions between `(a, b-c)` and `(a-b, c)` are structurally impossible.
 
 ### F9 — MEDIUM — Egress credential injection: API declared, gateway unbuilt
 *Design gap.* [`egress/`](../../../egress/) passes as a **local Docker proof
@@ -188,10 +257,18 @@ This matters because the threat being mitigated is precisely "the agent does
 something we didn't intend" — an enforcement mechanism the agent can switch off
 does not mitigate it.
 
-**Fix:** enforce below the sandbox, where the actor cannot reach the control —
-Substrate's `atunnel` does exactly this (nftables redirect on the host,
-mTLS to the gateway, authenticated actor identity headers). Treat
-`HTTPS_PROXY` as a development convenience only, and never as the production
+**Fix:** enforce below the sandbox, where the actor cannot reach the control.
+Substrate's `atunnel` does exactly this — nftables redirect on the *host*, mTLS
+to a remote gateway, authenticated `X-Ate-Atespace` / `X-Ate-Actor-Name` headers
+— and it is **no longer hypothetical**: it shipped in the Substrate we now run,
+and every worker logs `atunnel serving` at boot.
+
+What it does not do yet is carry our traffic. atunnel is L4 CONNECT only (no TLS
+termination, so no injection), and its `egress_gateway_address` has **no
+producer** in Substrate — nothing sets it, so no traffic is redirected today.
+The remaining work is ours: build the gateway (F9) and supply that address.
+
+Treat `HTTPS_PROXY` as a development convenience only, never as the production
 containment boundary.
 
 ### F12 — LOW — Placeholder credentials are a deliberate, smaller exposure
@@ -213,12 +290,21 @@ that validate key *format* locally fail before any network call.
 injection everywhere else — and prefer the latter. Never inject into the URL
 path (Slack-style path-secret webhooks are out of scope by design).
 
-### F10 — LOW — `InsecureSkipVerify` to ateapi
-*Spoofing.* `session.go:58` disables TLS verification to the Substrate control
-plane. In-cluster and now behind Substrate's own mTLS, so exposure is limited to
-an in-cluster MITM — but it defeats the mTLS that upstream just added.
+### F10 — LOW — **PARTIAL (merged, not enabled)** — `InsecureSkipVerify` to ateapi
+*Spoofing.* `ateapiTLS()` now verifies the control plane against a PEM bundle at
+`AGENTPLANE_ATEAPI_CA`, falling back to unverified TLS with a loud one-shot
+warning when it is absent or unparseable.
 
-**Fix:** verify against the ate CA bundle.
+**The deployment does not set `AGENTPLANE_ATEAPI_CA`**, so the running cluster is
+still on the unverified path. This is the one finding where "merged" and "fixed"
+diverge, which is why the status table above is written against the cluster
+rather than against `main`.
+
+Exposure stays limited to an in-cluster MITM, and Substrate's own mTLS sits
+underneath — but leaving it unset defeats the verification upstream added.
+
+**Fix:** mount the ate CA bundle and set `AGENTPLANE_ATEAPI_CA`; the code path
+already exists and the warning in the logs is the reminder.
 
 ### Accepted risks (deliberate, documented)
 
@@ -226,7 +312,7 @@ an in-cluster MITM — but it defeats the mTLS that upstream just added.
 |---|---|
 | The journal records command summaries | Audit requires seeing actions; the trail is the control |
 | Model-generated code runs arbitrary commands | gVisor is the boundary; tool policy is the user's (`allow`/`deny`) |
-| Grants are stateless (no revocation) | Simplicity; mitigated once F4's TTL shrinks |
+| Grants are stateless (no revocation) | Simplicity; bounded by F4's 10-minute TTL, which is now in place |
 
 ## 4. Abuse cases
 

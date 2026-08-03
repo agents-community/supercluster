@@ -34,7 +34,8 @@ package "GKE cluster" {
 }
 
 package "Google Cloud" {
-  rectangle "Secret Manager\nagentplane-cred-<user>-<name>" as sm
+  rectangle "Secret Manager\nagentplane-cred-<sha256(user)[:8]>-<name>" as sm
+  rectangle "Firestore\nsessions/ · agents/versions · usage/" as fs
   rectangle "GCS snapshots + transcripts\n<b>snapshots contain secrets</b> (F6)" <<danger>> as gcs
   rectangle "Cloud Logging\n(hand journal = audit trail)" as clog
 }
@@ -45,8 +46,9 @@ cloud "User's MCP servers\n& external systems (GitHub…)" as ext
 user --> tui
 tui --> lb : <b>HTTP</b> / bearer apl_… \n<color:#CC0000>cleartext (F2)</color>
 lb --> serve : HTTP / —
-serve --> ateapi : <b>gRPC/TLS</b> / <color:#CC0000>InsecureSkipVerify (F10)</color>
-serve --> atenet : HTTP / Host-header routing\n<color:#CC0000>no session ownership check (F1)</color>
+serve --> ateapi : <b>gRPC/TLS</b> / <color:#CC0000>CA verification available but\nAGENTPLANE_ATEAPI_CA unset (F10)</color>
+serve --> atenet : HTTP / Host-header routing\n<color:#007700>owner-checked per session (F1 fixed)</color>
+serve --> fs : gRPC/TLS · Workload Identity\nowner · version pin · usage
 disp --> ateapi : gRPC/TLS / same KSA
 disp --> atenet : HTTP / health probe before suspend
 atenet --> brain : HTTP / — (network position only)
@@ -68,7 +70,9 @@ ateapi --> gcs : checkpoint / restore snapshots
 note bottom of hand
   <b>Trust boundary 4 — the important one</b>
   Model-generated code executes here.
-  Contained by gVisor only; <color:#CC0000>no NetworkPolicy (F5)</color>
+  gVisor is the boundary. Substrate NetworkPolicies now admit
+  <color:#007700>ingress from atenet-router only</color>;
+  <color:#CC0000>egress is unrestricted (F5)</color>
   so it can reach serve, atenet and other actors.
 end note
 @enduml
