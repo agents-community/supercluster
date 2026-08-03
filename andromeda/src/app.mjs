@@ -103,7 +103,10 @@ function Line({ line }) {
 // ── slash commands ───────────────────────────────────────────────────────────
 // Input starting with "/" is a command for the TUI, never a message to the
 // agent. A table, so new commands (like /usage) are one-line additions.
-const COMMANDS = {
+// Exported so the slash commands can be exercised without a terminal: the
+// handlers are the part that can break against a changing API, while key
+// handling belongs to Ink.
+export const COMMANDS = {
   sleep: {
     desc: "suspend the mind (it wakes on your next message)",
     run: ({ client, sessionId, append }) =>
