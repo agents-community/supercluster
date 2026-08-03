@@ -370,6 +370,9 @@ func sessionSuspend(sc sessionCtx, args []string, alsoDelete bool) {
 	defer closeFn()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	// Read usage while the mind is still awake: once suspended it can only be
+	// read by resuming it, which costs a restore and defeats auto-sleep (#42).
+	recordUsageIfAwake(ctx, ctrl, sc, sid, brain)
 	// Deletion-lifecycle rule: escrow before destroy, always. Best-effort —
 	// never blocks the checkpoint.
 	escrowTranscript(sc, sid, brain)

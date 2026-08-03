@@ -8,7 +8,7 @@
 name: starter
 harness: claude-code
 model: claude-sonnet-5
-image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:cf5d5c36e13b3dd73145241ac81f1882f6452bf89e621c2f9f98cf1817010002
+image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:82a646ee7452ce56274b4d9bb2bf91dd4a28d72ad124a795768367c5b5d601df
 hand: true
 systemPrompt: >-
   You are a capable software engineer working in a persistent workspace that

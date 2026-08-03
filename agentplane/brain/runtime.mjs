@@ -12,6 +12,8 @@
 // resume-by-id on any error.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { startTurnSpan } from "./otel.mjs";
+import { actorIdentity } from "./identity.mjs";
 
 export function createRuntime({ workdir, spec, harness, identity }) {
   const EVENT_LOG = `${workdir}/events.jsonl`;
@@ -51,6 +53,10 @@ export function createRuntime({ workdir, spec, harness, identity }) {
   const queue = [];
   let wakeInput = null, failInput = null;
   let busy = false;
+  // The span covering the current turn, parented to the trace of the request
+  // that started it. Held here because a turn completes asynchronously, long
+  // after the HTTP response that queued it.
+  let turnSpan = null;
   let turnStartedAt = 0;
   let delivered = [];        // pulled into the harness, no result yet (re-queue on teardown)
   let sessionId = existsSync(SESSION_ID_FILE) ? readFileSync(SESSION_ID_FILE, "utf8").trim() : null;
@@ -104,6 +110,12 @@ export function createRuntime({ workdir, spec, harness, identity }) {
       emit("agent.message", { content: ev.content });
     } else if (ev.type === "session.status_idle") {
       busy = false;
+      if (turnSpan) {
+        turnSpan.setHarnessSession(sessionId); // resolved by now if it wasn't at accept
+        if (ev.stop_reason) turnSpan.setAttribute("agentplane.stop_reason", String(ev.stop_reason));
+        turnSpan.end();
+        turnSpan = null;
+      }
       turnStartedAt = 0;
       delivered = [];
       addUsage(ev.usage);
@@ -144,6 +156,13 @@ export function createRuntime({ workdir, spec, harness, identity }) {
       } catch (e) {
         const msg = String((e && e.message) || e);
         const timeout = timedOut || msg.includes("TURN_DEADLINE_EXCEEDED");
+        // The turn died without reaching status_idle: record why and close the
+        // span, or it would stay open and the trace would never be exported.
+        if (turnSpan) {
+          turnSpan.fail(msg);
+          turnSpan.end();
+          turnSpan = null;
+        }
         console.error(`${harness.name} harness error:`, msg);
         emit("session.error", {
           error: {
@@ -172,10 +191,17 @@ export function createRuntime({ workdir, spec, harness, identity }) {
   return {
     // Accept a user message: record it, mark running, enqueue, ensure the
     // harness is alive, and wake a waiting input pull.
-    acceptUserMessage(text) {
+    acceptUserMessage(text, parentCtx) {
       emit("user.message", { content: [{ type: "text", text }] });
       emit("session.status_running", {});
       busy = true;
+      // Continue serve's trace into the brain. Only the first message of a turn
+      // opens a span: messages that arrive while busy are folded into the turn
+      // already running, and opening a second span would leak the first.
+      if (parentCtx && !turnSpan) {
+        turnSpan = startTurnSpan(parentCtx, { "agentplane.actor": actorIdentity() });
+        turnSpan.setHarnessSession(sessionId);
+      }
       queue.push({ text });
       ensureStarted();
       if (wakeInput) wakeInput();

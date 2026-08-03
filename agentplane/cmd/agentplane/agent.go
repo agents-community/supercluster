@@ -413,6 +413,10 @@ func deleteSession(ctx context.Context, sc sessionCtx, sid, brain string) error 
 	defer closeFn()
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	// Capture cost before the mind goes away — after this the actor is gone and
+	// its usage is unrecoverable (#42). Same pass as escrow: the actor is live
+	// and we are already talking to it.
+	recordUsageIfAwake(ctx, ctrl, sc, sid, brain)
 	escrowTranscript(sc, sid, brain)
 	ref := &ateapipb.ObjectRef{Atespace: sc.atespace, Name: brain}
 	_, _ = ctrl.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}) // fine if already suspended
