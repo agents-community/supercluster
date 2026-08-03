@@ -130,7 +130,7 @@ type server struct {
 	vault    *vault                  // credential vault (Secret Manager); nil when unconfigured
 	grantKey []byte                  // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
 	emails   *emailAllowlist         // self-service /v1/access: emails allowed to self-issue a token
-	owners   *ownerStore             // session → owning user (threat-model F1)
+	owners   sessionStore            // session ownership + durable metadata (F1, #36)
 	limiter  *accessLimiter          // throttles unauthenticated /v1/access (F7)
 }
 
@@ -175,8 +175,10 @@ func runServe(args []string) {
 		vault:    v,
 		grantKey: grantSigningKey(),
 		emails:   emails,
-		owners:   newOwnerStore(env("BRAIN_TEMPLATE_NS", "agentplane")),
-		limiter:  newAccessLimiter(),
+		owners: newSessionStore(context.Background(),
+			env("AGENTPLANE_PROJECT", os.Getenv("GOOGLE_CLOUD_PROJECT")),
+			env("BRAIN_TEMPLATE_NS", "agentplane"), logger),
+		limiter: newAccessLimiter(),
 	}
 
 	mux := http.NewServeMux()
@@ -571,7 +573,7 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	// Best-effort: the session is usable without it; the hand just won't have the
 	// credential until re-granted. Must precede the first message.
 	// Claim ownership BEFORE anything else can touch the session (F1).
-	if err := s.owners.claim(r.Context(), sid, userOf(r)); err != nil {
+	if err := s.owners.claim(r.Context(), sid, userOf(r), in.Agent); err != nil {
 		s.log.Error("owner claim failed — session left unowned", "session", sid, "user", userOf(r), "err", err)
 	}
 	if err := s.grantHandCredentials(r.Context(), sid, userOf(r), in.Agent); err != nil {
@@ -631,13 +633,38 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out := map[string]any{"id": sid, "agent": a.GetActorTemplateName(), "harness": harnesses[a.GetActorTemplateName()]}
+		// Stored metadata first: it is readable while the mind SLEEPS, which the
+		// live probe below is not (probing resumes a suspended actor, undoing
+		// the auto-sleep that just saved the worker). A sleeping session used to
+		// report neither last_event_at nor usage at all — see #36.
+		if m, found := s.owners.get(r.Context(), sid); found {
+			if !m.LastActiveAt.IsZero() {
+				out["last_event_at"] = m.LastActiveAt.Format(time.RFC3339)
+			}
+			if len(m.Usage) > 0 {
+				out["usage"] = m.Usage
+			}
+			if !m.CreatedAt.IsZero() {
+				out["created_at"] = m.CreatedAt.Format(time.RFC3339)
+			}
+			if m.Title != "" {
+				out["title"] = m.Title
+			}
+		}
 		// Probe /healthz at most ONCE, and only when awake (probing wakes a
-		// sleeping mind). Derive status and enrichment from that single probe.
+		// sleeping mind). Live values supersede the stored ones for an awake
+		// mind, since the harness is authoritative while it is running.
 		if a.GetStatus().String() == "STATUS_RUNNING" {
 			if h, ok := probeHealth(s.sc, brain); ok {
-				out["busy"], out["queued"], out["last_event_at"] = h.Busy, h.Queued, h.LastEventAt
+				out["busy"], out["queued"] = h.Busy, h.Queued
+				if h.LastEventAt != "" {
+					out["last_event_at"] = h.LastEventAt
+				}
 				if len(h.Usage) > 0 {
 					out["usage"] = h.Usage
+					// Persist so this survives the next suspend, and the delete
+					// after it — usage used to die with the actor.
+					s.owners.touch(r.Context(), sid, h.Usage)
 				}
 				if h.Busy {
 					out["status"] = "running"
@@ -815,6 +842,15 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	// Stamp activity now that the message is accepted. Detached from the request
+	// context so the write survives the client hanging up, and off the response
+	// path so a slow store never delays the turn — losing a timestamp must not
+	// cost a message (#36).
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.owners.touch(ctx, sid, nil)
+	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, maxBody))

@@ -21,7 +21,7 @@ spec:
         # NOT a placeholder — applying this file must never break the running
         # deployment. `PROJECT_ID`/`:latest` here produced InvalidImageName on
         # a plain `kubectl apply`. Bump the tag here when you deploy.
-        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v17
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v19
         ports: [{ containerPort: 7433, name: http }]
         env:
         # Per-user tokens: serve reads this JSON file ({"user":"token"}) from a
@@ -53,6 +53,12 @@ spec:
         # Real value, not a placeholder: an empty default here silently reverts
         # whatever `kubectl set env` had configured on every apply, and the
         # failure surfaces far away as "failed to compile agent spec".
+        # Selects the GCP project for the credential vault (Secret Manager)
+        # AND the session metadata store (Firestore, #36). Was set on the live
+        # Deployment but missing here: apply preserved it only because 3-way
+        # merge treats unmanaged keys as external, so the repo could not have
+        # rebuilt this cluster — both would have silently degraded.
+        - { name: AGENTPLANE_PROJECT, value: "project-28d42275-7fed-43e6-a9a" }
         - { name: AGENTPLANE_BUCKET, value: "snapshot-substrate-test-project-28d42275-7fed-43e6-a9a" }
         # Tracing (optional):
         - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
