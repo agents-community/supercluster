@@ -94,6 +94,18 @@ hand-pull route, and grants cannot call anything else.
     List/get derive `sleeping` from the actor state alone — `/healthz` probes
     go only to awake minds, because probing a suspended actor would resume it.
 
+    `usage`, `last_event_at` and `created_at` come from the **session store**,
+    so they are returned for sleeping minds too, and `usage` survives the
+    session's deletion. Live values from an awake harness supersede them.
+
+!!! warning "Bodyless POSTs need an explicit `Content-Length: 0` under curl"
+    `POST /v1/sessions/{id}/suspend` takes no body. `curl -X POST` sends
+    neither `Content-Length` nor `Transfer-Encoding`, and the Google load
+    balancer rejects that with **`411 Length Required`** before it reaches
+    serve — an HTML error page, not a JSON one. Add `-H 'Content-Length: 0'`
+    (or `-d ''`). Browsers and Node `fetch` set the header themselves, so
+    andromeda and the SDKs are unaffected.
+
 ## Bring-your-own key (ephemeral)
 
 A session can run on the **user's own vendor key** instead of the shared one
