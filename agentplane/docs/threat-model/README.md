@@ -155,14 +155,63 @@ for all inputs.
 **Fix:** hash or length-prefix the components; validate `name` against a strict
 charset.
 
-### F9 — MEDIUM — Egress credential injection is unbuilt and **untested on-cluster**
+### F9 — MEDIUM — Egress credential injection: API declared, gateway unbuilt
 *Design gap.* [`egress/`](../../../egress/) passes as a **local Docker proof
 only** — verified: zero egress pods in the cluster. Today's reality is the path
-F3/F6 describe: credentials are copied *into* the sandbox. Every claim about
-"secretless" applies to the target state, not the deployment.
+F3/F6 describe: credentials are copied *into* the sandbox.
 
-**Fix:** the v1 deployment tracked in the egress module README; until then the
-docs must not imply it is live (this file is the correction).
+**Update (#29 / #30):** the AgentSpec now carries an egress policy — `egress.mode`
++ `allowedHosts` for reachability, and `credentials[].inject` binding a
+credential to the destinations that receive it. It validates, compiles onto the
+ActorTemplate, and is **inert**: no gateway consumes it, so declaring a policy
+constrains nothing. Two layers are enforced at *create* time (a host must be
+both reachable and trusted with the secret) so a policy can't silently match
+nothing — but that is input validation, not runtime containment.
+
+Remaining chain: serve renders the policy per session → gateway actor
+(`e-<sid>`) → traffic actually forced through it (F11) → `egress_gateway_address`
+wired, which Substrate leaves unproduced.
+
+**Fix:** deploy the gateway. Until then the docs must not imply the sandbox is
+secretless — this file and `docs/agents.md` both carry that correction.
+
+### F11 — HIGH — Proxy enforcement via `HTTPS_PROXY` is bypassable by the code it contains
+*Elevation of privilege / design gap.* The v1 proof routes egress by setting
+`HTTPS_PROXY` in the hand and trusting the proxy's CA. That is a **cooperative**
+control: model-generated code running in that same sandbox can `unset
+HTTPS_PROXY`, pass `--noproxy`, or open a raw socket, and its traffic leaves via
+the worker's normal NAT path — unfiltered, unlogged, and unaffected by any
+allowlist. The proof demonstrates that injection *works*; it does not
+demonstrate that egress is *contained*.
+
+This matters because the threat being mitigated is precisely "the agent does
+something we didn't intend" — an enforcement mechanism the agent can switch off
+does not mitigate it.
+
+**Fix:** enforce below the sandbox, where the actor cannot reach the control —
+Substrate's `atunnel` does exactly this (nftables redirect on the host,
+mTLS to the gateway, authenticated actor identity headers). Treat
+`HTTPS_PROXY` as a development convenience only, and never as the production
+containment boundary.
+
+### F12 — LOW — Placeholder credentials are a deliberate, smaller exposure
+*Information disclosure (accepted trade-off).* Pure injection assumes the
+sandbox sends an *uncredentialed* request the gateway then authenticates. Many
+real clients won't: `git` will not attempt Basic auth with no credential
+configured, and most CLIs read a key from the environment before making any
+call. Supporting them requires an **opaque placeholder** inside the sandbox
+which the gateway swaps for the real secret at egress (the approach Anthropic's
+Managed Agents uses for `environment_variable` credentials).
+
+The placeholder is a real string the agent can read and exfiltrate — so this is
+weaker than holding nothing, but far stronger than F6 (the placeholder is
+useless anywhere except through the gateway, which decides whether the caller
+and destination are entitled to the real value). Known side effect: clients
+that validate key *format* locally fail before any network call.
+
+**Fix:** support both modes — placeholder where the client demands one, pure
+injection everywhere else — and prefer the latter. Never inject into the URL
+path (Slack-style path-secret webhooks are out of scope by design).
 
 ### F10 — LOW — `InsecureSkipVerify` to ateapi
 *Spoofing.* `session.go:58` disables TLS verification to the Substrate control
@@ -188,8 +237,62 @@ an in-cluster MITM — but it defeats the mTLS that upstream just added.
 5. **Snapshot-bucket reader replays a mind** — reads conversations and keys (F6).
 6. **Prompt injection from a fetched web page** steering tool calls — mitigated only by tool policy + sandbox; the egress allowlist (F9) is the real containment.
 
+## 5. Alignment with Substrate's own threat model
+
+Substrate published [`docs/threat-model.md`](https://github.com/agent-substrate/substrate/blob/main/docs/threat-model.md)
+in [PR #559](https://github.com/agent-substrate/substrate/pull/559) (the atunnel
+work, already in our pinned base). It was written independently of this
+document, which makes the overlap evidence rather than coincidence.
+
+**It validates our findings.** Their Critical-rated threats map onto ours:
+
+| Their threat (priority) | Ours |
+|---|---|
+| "Malicious actor gains access to other actors via network" — *policies must deny ingress and egress by default* (Critical) | **F5** |
+| "…via node-local endpoints exposed on the network (e.g. instance metadata)" (Critical) | **F5** — our policy blocks `169.254.169.254` |
+| "…via Kubernetes APIs — **strong preference on blocking actor access**" (Critical) | **F5** |
+| "Malicious actor gains access to snapshots of other actors and steals data" + *avoid snapshotting sensitive credentials* (Critical) | **F6** |
+| "Tricks Substrate identity broker into returning credentials for a different actor" — *tie claims to actor/worker, validate on use* (Critical) | **F3** — our grants are HMAC+exp only, unbound to the caller |
+| "Improper handling of Secrets — ensure an official, secure way to pass secret data to actors" (High) | **F3 / F6** |
+
+**It prescribes our egress module by name.** Their highest agent-specific
+threat is one only an agent platform has:
+
+> *"Agent leaks credentials exposed in sandbox, because LLMs are unreliable.
+> Due to prompt injection or just agent silliness."* (High)
+>
+> **Mitigating invariant:** *"Credentials are not exposed in sandboxes by default."*
+>
+> **Suggested mitigation:** *"Opt-in to credentials, none by default.
+> **Credential injecting proxy (injects tokens or terminates TLS and holds
+> x509 private key on behalf of sandbox).**"*
+
+That is precisely [`egress/`](../../../egress/), arrived at independently. It
+promotes **F9** from "our differentiator" to "the mitigation the platform's own
+security analysis calls for" — and the *GitHub Issue* column is empty
+throughout their table, so none of it appears claimed yet.
+
+### What they cover that we do not
+
+Substrate-layer concerns we inherit rather than own, tracked here because a
+failure there defeats our controls:
+
+- **Worker reuse** — all actor state (process, filesystem, env, network policy)
+  must be reset between actors sharing a worker; they call out stale-policy
+  races explicitly.
+- **Snapshot integrity** — corrupt or attacker-written snapshots must be
+  verified before restore; we treat snapshots as trusted today.
+- **Actor self-modification** — an actor reading or writing its own snapshot;
+  their fix is separate credentials for snapshot access.
+- **Cluster DNS exposure** — actors can enumerate internal topology; they
+  recommend not exposing Substrate-internal DNS to actors at all.
+- **Actor-creation quotas** — fork-bomb style resource exhaustion. Relevant to
+  us as soon as testers can create sessions freely.
+
 ## 5. What to fix first
 
 1. **F2 (TLS)** and **F1 (session ownership)** — before any external tester. Both are small.
 2. **F5 (NetworkPolicy)** and **F4 (grant TTL)** — cheap, big blast-radius reduction.
 3. **F3 (key separation)** then **F9 (egress injection)** — the structural fixes; F9 subsumes F6.
+4. When building F9, enforce via **atunnel, not `HTTPS_PROXY`** (F11) — otherwise the
+   containment is one `unset` away from being nothing.
