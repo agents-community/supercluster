@@ -26,6 +26,11 @@ metadata:
 spec:
   domains: [api.supercluster.dev]
 ---
+# !! This Ingress is named `agentplane` — THE SAME NAME AS THE LIVE ONE.
+# Applying this file REPLACES the working nip.io ingress. Do that only after
+# the domain resolves (step 1 of HTTPS-CUTOVER.md); applying it early points
+# the public endpoint at a hostname that does not resolve and takes the
+# platform offline until you re-apply the old ingress.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
