@@ -4,28 +4,30 @@ Closes threat-model **F2** (#20): today the public endpoint is plain HTTP, so
 bearer tokens, prompts, and the GitHub PAT in `PUT /v1/credentials` all cross
 the internet in cleartext.
 
-Prepared already (nothing to redo):
+Prepared already: [`ingress-tls.yaml`](ingress-tls.yaml) with the hostname,
+a ManagedCertificate, and `allow-http: "false"`. The static IP
+**136.68.213.85** (`agentplane-ip`) is reserved and is already the ingress
+address, so the cutover needs no IP change.
 
-- Cloud DNS zone **`supercluster-dev`** in this project
-- **`A api.supercluster.dev → 136.68.213.85`** (the reserved `agentplane-ip`,
-  already the ingress address)
-- [`ingress-tls.yaml`](ingress-tls.yaml) with the real hostname, ManagedCertificate,
-  and `allow-http: "false"`
+## 1. Register the domain and point it at the IP (you)
 
-## 1. Register the domain (you)
+Buy `supercluster.dev` (Porkbun ~$11/yr and Namecheap ~$13/yr both include
+WHOIS privacy, which `.dev` needs — Cloud Domains cannot offer it here).
+Registering through GCP is **not** required and failed twice with an opaque
+`REGISTER_FAILURE_REASON_UNKNOWN`; any registrar works.
 
-Buy `supercluster.dev`, then set the registrar's nameservers to:
+In the registrar's own DNS panel add a single record — leave the nameservers
+at their default:
 
-```
-ns-cloud-a1.googledomains.com.
-ns-cloud-a2.googledomains.com.
-ns-cloud-a3.googledomains.com.
-ns-cloud-a4.googledomains.com.
-```
+| Type | Host | Value | TTL |
+|---|---|---|---|
+| `A` | `api` | `136.68.213.85` | default |
 
-(Cloud Domains does this automatically; Namecheap/Porkbun need it entered by hand.)
+Cloud DNS is deliberately not used: it would mean delegating nameservers to
+GCP to hold one record, and the GKE ManagedCertificate validates over HTTP
+against the load balancer, not DNS — so there is nothing to automate.
 
-Wait for public resolution — this is the gate for everything below:
+Wait for public resolution — this gates everything below:
 
 ```bash
 until dig +short api.supercluster.dev @8.8.8.8 | grep -q 136.68.213.85; do sleep 60; done
