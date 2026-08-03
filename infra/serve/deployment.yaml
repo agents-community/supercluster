@@ -18,7 +18,10 @@ spec:
       serviceAccountName: agentplane-serve
       containers:
       - name: serve
-        image: gcr.io/PROJECT_ID/ate-images/agentplane-serve:latest  # set by CI / kustomize
+        # NOT a placeholder — applying this file must never break the running
+        # deployment. `PROJECT_ID`/`:latest` here produced InvalidImageName on
+        # a plain `kubectl apply`. Bump the tag here when you deploy.
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v16
         ports: [{ containerPort: 7433, name: http }]
         env:
         # Per-user tokens: serve reads this JSON file ({"user":"token"}) from a
@@ -47,7 +50,10 @@ spec:
         # POST /v1/access, from a mounted ConfigMap (hot-reloaded).
         - { name: AGENTPLANE_ALLOWED_EMAILS_FILE, value: "/etc/agentplane-access/emails" }
         # Escrow (optional — needs Workload Identity on the ServiceAccount):
-        - { name: AGENTPLANE_BUCKET, value: "" }
+        # Real value, not a placeholder: an empty default here silently reverts
+        # whatever `kubectl set env` had configured on every apply, and the
+        # failure surfaces far away as "failed to compile agent spec".
+        - { name: AGENTPLANE_BUCKET, value: "snapshot-substrate-test-project-28d42275-7fed-43e6-a9a" }
         # Tracing (optional):
         - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
         # Inject Claude Code LLM telemetry into every baked agent (llm_request
@@ -64,9 +70,20 @@ spec:
           requests: { cpu: "100m", memory: "128Mi" }
           limits: { memory: "512Mi" }
         volumeMounts:
+        # Substrate's control plane authenticates clients: serve presents this
+        # projected ServiceAccount token as a gRPC bearer credential, validated
+        # against the cluster issuer + audience api.ate-system.svc.
+        - { name: ateapi-token, mountPath: /run/ateapi-token, readOnly: true }
         - { name: tokens, mountPath: /etc/agentplane, readOnly: true }
         - { name: allowed-emails, mountPath: /etc/agentplane-access, readOnly: true }
       volumes:
+      - name: ateapi-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: api.ate-system.svc
+              expirationSeconds: 3600
+              path: token
       - name: tokens
         secret:
           secretName: agentplane-serve-tokens

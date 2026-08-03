@@ -111,3 +111,79 @@ If a patch no longer applies (upstream moved the code), apply it with
 `0001` is a genuine fix and a good upstream-PR candidate. When a patch lands
 upstream, delete it here after the next sync includes it, so we only carry deltas
 that aren't yet upstream.
+
+## Upgrading the Substrate install (learned the hard way, 2026-08-02)
+
+The c1ab095 → 860250b upgrade caused a multi-hour outage. Every failure below
+was avoidable with a pre-flight check; run these in order.
+
+### Before you start
+
+1. **Diff the manifests for RENAMES.** This was the single biggest cause of
+   pain — three workloads were renamed upstream, and Kubernetes has no notion
+   of a rename: the installer creates the new object while the **old one keeps
+   running**, so both serve at once.
+
+   ```bash
+   git diff <old>..<new> -- manifests/ | grep -E '^[-+]\s+name:'
+   ```
+
+   In this upgrade: `ate-api-server-deployment` → `ate-api-server` (both
+   matched the Service selector, so a third of control-plane traffic hit the
+   *old* binary), and `brain-pool-deployment` → `brain-pool` (the new pools
+   crash-looped while the old ones served, so the controller dialed ateom
+   sockets on pods that no longer existed). Delete the orphans explicitly.
+
+2. **Check the protos for reserved fields.** protojson *rejects* a reserved
+   field rather than ignoring it, so every record written by the old version
+   becomes unreadable:
+
+   ```bash
+   git diff <old>..<new> -- '*.proto' | grep -E '^\+\s+reserved'
+   ```
+
+   Here `latest_snapshot_info` was reserved, and every actor record in valkey
+   failed to unmarshal until stripped — **across all three shards**
+   (`valkey-cli --scan` only walks the node you ask, not the cluster).
+
+3. **Plan to rebuild ateom in the same pass.** `--deploy-ate-system` does *not*
+   build it (it ships via our WorkerPool CRs), but the new controller injects
+   `--atunnel-*` flags into it. Skew guarantees `unknown flag: …` crash-loops.
+
+   ```bash
+   KO_DOCKER_REPO=gcr.io/<proj>/ate-images KO_DEFAULTPLATFORMS=linux/amd64 \
+     ./hack/run-tool.sh ko build ./cmd/ateom-gvisor      # no extra flags: --bare/--tags skip the manifest push
+   kubectl -n agentplane patch workerpool <pool> --type=merge \
+     -p '{"spec":{"ateomImage":"<new digest>"}}'
+   ```
+
+4. **Keep the patches on a branch, not in the working tree.** `agentplane-patches`
+   in the Substrate checkout. A stray `git checkout .` would otherwise silently
+   drop the atenet stream-timeout fix and rebuild a clean atenet whose 10s route
+   timeout kills every SSE turn — healthy-looking and completely broken.
+
+### Running it
+
+```bash
+kubectl apply -f manifests/ate-install/generated/role.yaml   # FIRST: RBAC gates the controller
+./hack/install-ate.sh --deploy-ate-system                    # retry on push failures; ko resumes
+./hack/install-ate.sh --create-valkey-ca-certs-secret        # if valkey peers fail TLS
+```
+
+RBAC first because the controller watches resources the old ClusterRole didn't
+grant (`networkpolicies`), and without it the manager aborts on cache-sync and
+crash-loops — while the install applies that role *last*.
+
+Pushes fail intermittently with `tls: bad record MAC`. ko skips blobs already
+pushed, so retrying converges; `hack/` has no retry wrapper, so loop it.
+
+### After
+
+- Old renamed Deployments deleted (step 1) — check `kubectl get endpoints` to
+  confirm only new pods serve.
+- valkey: `cluster_state:ok`. If nodes restarted together their `nodes.conf`
+  holds stale IPs — `CLUSTER MEET <current-ip> 6379` from one node re-meshes,
+  but only *after* TLS works (a 2-root trust bundle: servicedns + podidentity).
+- Golden actors that crashed during the broken window stay `STATUS_CRASHED` and
+  the controller refuses to resume them — delete and recreate the agents.
+- `./test/smoke-live.sh` must pass before declaring done.
