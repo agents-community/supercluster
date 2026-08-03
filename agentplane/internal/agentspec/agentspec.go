@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -45,7 +46,86 @@ type AgentSpec struct {
 	// Credentials names vault entries (see `agentplane cred …`) this agent's
 	// sessions need. serve mints a scoped grant so the HAND pulls them at start;
 	// the values never enter this spec or the brain. Requires hand:true.
-	Credentials []string `yaml:"credentials,omitempty"`
+	// Each entry is either a bare name ("gh-token") or an object carrying an
+	// egress injection policy — see Credential.
+	Credentials []Credential `yaml:"credentials,omitempty"`
+	// Egress declares where this agent's sessions may talk. Deny-by-default
+	// allowlisting is opt-in per agent; the default (unrestricted) is today's
+	// behavior. NOT YET ENFORCED — see the note on Egress.
+	Egress *Egress `yaml:"egress,omitempty"`
+}
+
+// Egress is the agent's outbound network policy.
+//
+// NOT YET ENFORCED. These fields are declarative today: they validate and
+// compile onto the ActorTemplate so serve can render a gateway policy per
+// session, but no gateway is deployed yet (threat-model F9), so actor egress
+// is still unrestricted in practice. Documented as aspiration, not reality.
+type Egress struct {
+	// Mode is "unrestricted" (default — today's behavior) or "limited"
+	// (deny-by-default; only AllowedHosts are reachable).
+	Mode string `yaml:"mode,omitempty"`
+	// AllowedHosts are the destinations reachable under mode: limited.
+	// Hostnames only — no scheme, no path, no port.
+	AllowedHosts []string `yaml:"allowedHosts,omitempty"`
+}
+
+// Credential is a vault entry this agent needs, optionally with an injection
+// policy. It accepts either YAML form:
+//
+//	credentials: [gh-token]                      # bare name: no injection
+//	credentials:
+//	  - name: gh-token
+//	    inject:
+//	      hosts: [github.com]
+//	      location: {header: true}
+type Credential struct {
+	Name string `yaml:"name"`
+	// Inject, when set, means the egress gateway supplies this credential on
+	// requests to Hosts — the sandbox never holds the value. Absent, the
+	// credential follows the legacy path: the hand pulls it into actor memory.
+	Inject *Inject `yaml:"inject,omitempty"`
+}
+
+// Inject binds a credential to the destinations that receive it.
+//
+// Hosts is deliberately separate from Egress.AllowedHosts: reachability and
+// credential scope are different questions. A host must be in BOTH to receive
+// the secret — being reachable never implies being trusted with it.
+type Inject struct {
+	Hosts    []string `yaml:"hosts"`
+	Location Location `yaml:"location,omitempty"`
+}
+
+// Location is where in the outbound request the secret is substituted.
+// The URL path is deliberately absent and unsupported: path-secret endpoints
+// (e.g. Slack incoming webhooks) cannot be injected — use header auth.
+type Location struct {
+	Header bool `yaml:"header,omitempty"`
+	Body   bool `yaml:"body,omitempty"`
+}
+
+// UnmarshalYAML accepts a bare string or the object form.
+func (c *Credential) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		return node.Decode(&c.Name)
+	}
+	type plain Credential // avoid recursing into this method
+	var p plain
+	if err := node.Decode(&p); err != nil {
+		return err
+	}
+	*c = Credential(p)
+	return nil
+}
+
+// names returns just the credential names, the shape serve reads.
+func (s *AgentSpec) credentialNames() []string {
+	out := make([]string, 0, len(s.Credentials))
+	for _, c := range s.Credentials {
+		out = append(out, c.Name)
+	}
+	return out
 }
 
 type Workspace struct {
@@ -137,8 +217,85 @@ func (s *AgentSpec) Validate() error {
 	if _, err := keyForSpec(s); err != nil {
 		return err
 	}
+	return s.validateEgress()
+}
+
+// hostRe is a plain DNS hostname: labels of [a-z0-9-], dot-separated. No
+// scheme, no port, no path — those are the usual ways an allowlist entry ends
+// up matching nothing while looking correct.
+var hostRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+
+func validHost(h string) error {
+	switch {
+	case strings.Contains(h, "://"):
+		return fmt.Errorf("host %q must not include a scheme", h)
+	case strings.ContainsAny(h, "/?#"):
+		return fmt.Errorf("host %q must not include a path", h)
+	case strings.Contains(h, ":"):
+		return fmt.Errorf("host %q must not include a port", h)
+	case !hostRe.MatchString(h):
+		return fmt.Errorf("host %q is not a valid hostname (lowercase, dot-separated labels)", h)
+	}
 	return nil
 }
+
+func (s *AgentSpec) validateEgress() error {
+	limited := false
+	allowed := map[string]bool{}
+	if e := s.Egress; e != nil {
+		switch e.Mode {
+		case "", "unrestricted":
+			if len(e.AllowedHosts) > 0 {
+				return fmt.Errorf("egress.allowedHosts requires mode: limited (unrestricted reaches everything)")
+			}
+		case "limited":
+			limited = true
+			if len(e.AllowedHosts) == 0 {
+				return fmt.Errorf("egress.mode: limited requires at least one allowedHosts entry (an empty allowlist reaches nothing)")
+			}
+		default:
+			return fmt.Errorf("unknown egress.mode %q (want unrestricted or limited)", e.Mode)
+		}
+		for _, h := range e.AllowedHosts {
+			if err := validHost(h); err != nil {
+				return fmt.Errorf("egress.allowedHosts: %w", err)
+			}
+			allowed[h] = true
+		}
+	}
+	seen := map[string]bool{}
+	for _, c := range s.Credentials {
+		if !credNameRe.MatchString(c.Name) {
+			return fmt.Errorf("credential name %q must be a lowercase DNS-1123 label", c.Name)
+		}
+		if seen[c.Name] {
+			return fmt.Errorf("duplicate credential %q", c.Name)
+		}
+		seen[c.Name] = true
+		if c.Inject == nil {
+			continue
+		}
+		if len(c.Inject.Hosts) == 0 {
+			return fmt.Errorf("credential %q: inject.hosts must name at least one destination", c.Name)
+		}
+		for _, h := range c.Inject.Hosts {
+			if err := validHost(h); err != nil {
+				return fmt.Errorf("credential %q: inject.%w", c.Name, err)
+			}
+			// Two layers, both required: reachable AND trusted with the secret.
+			if limited && !allowed[h] {
+				return fmt.Errorf("credential %q injects into %q, which is not in egress.allowedHosts — a host must be reachable before it can be trusted with a secret", c.Name, h)
+			}
+		}
+		if !c.Inject.Location.Header && !c.Inject.Location.Body {
+			return fmt.Errorf("credential %q: inject.location must enable header and/or body", c.Name)
+		}
+	}
+	return nil
+}
+
+// credNameRe matches vault credential names (same charset the vault enforces).
+var credNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
 
 // runtimeSpec is the subset shipped to the in-image adapter as AGENTPLANE_SPEC.
 func (s *AgentSpec) runtimeSpec() string {
@@ -170,7 +327,11 @@ func (s *AgentSpec) runtimeSpec() string {
 		rt["mcp"] = m
 	}
 	if len(s.Credentials) > 0 {
-		rt["credentials"] = s.Credentials
+		// Names only — serve reads this shape to mint the hand's grant.
+		rt["credentials"] = s.credentialNames()
+	}
+	if eg := s.egressPolicy(); eg != nil {
+		rt["egress"] = eg
 	}
 	b, _ := json.Marshal(rt)
 	return string(b)
@@ -259,4 +420,50 @@ func (s *AgentSpec) CompileTemplate(namespace, bucket string) ([]byte, error) {
 		tmpl["spec"].(map[string]any)["volumes"] = []map[string]any{{"name": "workspace", "durableDir": map[string]any{}}}
 	}
 	return json.MarshalIndent(tmpl, "", "  ")
+}
+
+// egressPolicy renders the compiled egress policy carried on the template:
+// the reachability allowlist plus each credential's injection binding. serve
+// turns this into the gateway's per-session policy. nil when the agent
+// declares neither.
+func (s *AgentSpec) egressPolicy() map[string]any {
+	injections := []map[string]any{}
+	for _, c := range s.Credentials {
+		if c.Inject == nil {
+			continue
+		}
+		loc := map[string]bool{}
+		if c.Inject.Location.Header {
+			loc["header"] = true
+		}
+		if c.Inject.Location.Body {
+			loc["body"] = true
+		}
+		if len(loc) == 0 {
+			loc["header"] = true // validated default: header-only
+		}
+		injections = append(injections, map[string]any{
+			"credential": c.Name,
+			"hosts":      c.Inject.Hosts,
+			"location":   loc,
+		})
+	}
+	mode, hosts := "unrestricted", []string(nil)
+	if s.Egress != nil {
+		if s.Egress.Mode != "" {
+			mode = s.Egress.Mode
+		}
+		hosts = s.Egress.AllowedHosts
+	}
+	if mode == "unrestricted" && len(injections) == 0 {
+		return nil // nothing to say
+	}
+	out := map[string]any{"mode": mode}
+	if len(hosts) > 0 {
+		out["allowedHosts"] = hosts
+	}
+	if len(injections) > 0 {
+		out["injections"] = injections
+	}
+	return out
 }
