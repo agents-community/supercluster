@@ -21,7 +21,7 @@ spec:
       serviceAccountName: agentplane-serve
       containers:
       - name: dispatcher
-        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v24  # same image as serve
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v27  # same image as serve
         command: ["/usr/local/bin/agentplane"]
         args: ["dispatcher", "-idle-after=120s", "-interval=30s"]
         env:

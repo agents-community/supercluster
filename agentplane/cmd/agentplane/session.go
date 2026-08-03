@@ -181,7 +181,7 @@ func sessionNew(sc sessionCtx, args []string) {
 	agent := fs.String("agent", sc.template, "agent to mint from (ActorTemplate name)")
 	_ = fs.Parse(args)
 	sc.template = *agent
-	sid, err := createSession(context.Background(), sc, *agent)
+	sid, err := createSession(context.Background(), sc, *agent, "", nil)
 	if err != nil {
 		log.Fatal(err)
 	}

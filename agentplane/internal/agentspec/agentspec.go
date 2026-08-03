@@ -133,8 +133,43 @@ type Workspace struct {
 }
 
 type MCPSrv struct {
-	URL     string            `yaml:"url"`
+	URL string `yaml:"url"`
+	// Headers are literal, and therefore public: the spec is stored on the
+	// ActorTemplate, in the agent's append-only version history, and in every
+	// snapshot of every session minted from it. Only non-secret headers belong
+	// here — validation rejects the auth-bearing ones.
 	Headers map[string]string `yaml:"headers,omitempty"`
+	// HeadersFrom names a vault credential per header, resolved at session
+	// setup for the user who created the session. The reference is what gets
+	// stored; the value never enters the spec, the template, the history or a
+	// snapshot — and two users of the same agent reach the upstream as
+	// themselves rather than sharing one identity.
+	HeadersFrom map[string]CredentialRef `yaml:"headersFrom,omitempty"`
+}
+
+// CredentialRef points at an entry in the caller's credential vault.
+type CredentialRef struct {
+	Credential string `yaml:"credential" json:"credential"`
+	// Format wraps the secret; "{}" is the placeholder. Defaults to the bare
+	// value, so `Bearer {}` or `token {}` are written explicitly.
+	Format string `yaml:"format,omitempty" json:"format,omitempty"`
+}
+
+// Render returns the header value for a resolved secret.
+func (c CredentialRef) Render(secret string) string {
+	if c.Format == "" {
+		return secret
+	}
+	return strings.ReplaceAll(c.Format, "{}", secret)
+}
+
+// secretHeaders are header names whose value is a credential. A literal here is
+// rejected: it would be stored in three places that outlive the session, and
+// shared by every user of the agent.
+var secretHeaders = map[string]bool{
+	"authorization": true, "proxy-authorization": true, "cookie": true,
+	"x-api-key": true, "x-auth-token": true, "x-access-token": true,
+	"api-key": true, "x-goog-api-key": true,
 }
 
 type keyRef struct{ EnvVar, DefaultSecret string }
@@ -217,6 +252,9 @@ func (s *AgentSpec) Validate() error {
 	if _, err := keyForSpec(s); err != nil {
 		return err
 	}
+	if err := s.validateMCP(); err != nil {
+		return err
+	}
 	return s.validateEgress()
 }
 
@@ -235,6 +273,38 @@ func validHost(h string) error {
 		return fmt.Errorf("host %q must not include a port", h)
 	case !hostRe.MatchString(h):
 		return fmt.Errorf("host %q is not a valid hostname (lowercase, dot-separated labels)", h)
+	}
+	return nil
+}
+
+// validateMCP keeps credentials out of the spec. A literal auth header would be
+// stored on the ActorTemplate, in the agent's append-only version history, and
+// in every snapshot — and rotating the secret would not remove the old one from
+// history. It would also be one identity shared by every user of the agent.
+func (s *AgentSpec) validateMCP() error {
+	for name, srv := range s.MCP {
+		if srv.URL == "" {
+			return fmt.Errorf("mcp %q: url is required", name)
+		}
+		for h := range srv.Headers {
+			if secretHeaders[strings.ToLower(strings.TrimSpace(h))] {
+				return fmt.Errorf("mcp %q: header %q carries a credential and must not be a "+
+					"literal — the spec is stored on the template, in version history and in "+
+					"every snapshot. Use headersFrom: {%s: {credential: <vault-name>}}", name, h, h)
+			}
+		}
+		for h, ref := range srv.HeadersFrom {
+			if ref.Credential == "" {
+				return fmt.Errorf("mcp %q: headersFrom %q needs a credential name", name, h)
+			}
+			if _, dup := srv.Headers[h]; dup {
+				return fmt.Errorf("mcp %q: header %q is set both literally and via headersFrom", name, h)
+			}
+			if ref.Format != "" && !strings.Contains(ref.Format, "{}") {
+				return fmt.Errorf("mcp %q: headersFrom %q format %q has no {} placeholder, so the "+
+					"secret would be dropped", name, h, ref.Format)
+			}
+		}
 	}
 	return nil
 }
@@ -300,8 +370,9 @@ var credNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
 // runtimeSpec is the subset shipped to the in-image adapter as AGENTPLANE_SPEC.
 func (s *AgentSpec) runtimeSpec() string {
 	type mcp struct {
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers,omitempty"`
+		URL         string                   `json:"url"`
+		Headers     map[string]string        `json:"headers,omitempty"`
+		HeadersFrom map[string]CredentialRef `json:"headersFrom,omitempty"`
 	}
 	rt := map[string]any{}
 	if s.SystemPrompt != "" {
@@ -322,7 +393,9 @@ func (s *AgentSpec) runtimeSpec() string {
 	if len(s.MCP) > 0 {
 		m := map[string]mcp{}
 		for k, v := range s.MCP {
-			m[k] = mcp{URL: v.URL, Headers: v.Headers}
+			// HeadersFrom carries only vault NAMES, so it is safe to compile
+			// onto the template; serve resolves them per session, per user.
+			m[k] = mcp{URL: v.URL, Headers: v.Headers, HeadersFrom: v.HeadersFrom}
 		}
 		rt["mcp"] = m
 	}

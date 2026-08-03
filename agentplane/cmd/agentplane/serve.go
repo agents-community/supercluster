@@ -734,7 +734,7 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 			template, version = s.agents.latestTemplate(r.Context(), in.Agent)
 		}
 	}
-	sid, err := createSession(r.Context(), s.sc, template)
+	sid, err := createSession(r.Context(), s.sc, template, userOf(r), s.vault)
 	if err != nil {
 		s.fail(w, r, http.StatusBadGateway, "failed to create session", err)
 		return

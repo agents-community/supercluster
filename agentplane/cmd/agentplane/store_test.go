@@ -179,3 +179,30 @@ func TestUsageCaptureSkipsWhenClientAbsent(t *testing.T) {
 		t.Error("captured usage without confirming the actor is RUNNING — this can wake a sleeping mind")
 	}
 }
+
+// GCP labels accept only [\p{Ll}\p{Lo}\p{N}_-]. Labelling a secret with a raw
+// email made PUT /v1/credentials fail for every real address — the vault only
+// ever worked for test names without a dot or an @.
+func TestUserTagIsLabelSafe(t *testing.T) {
+	for _, u := range []string{
+		"dharamendra.kumar@outlook.com", "a+b@example.co.uk", "UPPER@Example.COM", "alice",
+	} {
+		tag := userTag(u)
+		if tag == "" {
+			t.Fatalf("%s: empty tag", u)
+		}
+		for _, r := range tag {
+			ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
+			if !ok {
+				t.Errorf("%s -> %q contains %q, which GCP labels reject", u, tag, r)
+			}
+		}
+		if len(tag) > 63 {
+			t.Errorf("%s: tag too long for a label (%d)", u, len(tag))
+		}
+	}
+	// Distinct users must not collide into one another's credentials.
+	if userTag("alice@example.com") == userTag("bob@example.com") {
+		t.Error("SECURITY: two users share a tag")
+	}
+}

@@ -49,7 +49,7 @@ func runChat(args []string) {
 		os.Exit(2)
 	case sid == "":
 		var err error
-		if sid, err = createSession(context.Background(), sc, *agent); err != nil {
+		if sid, err = createSession(context.Background(), sc, *agent, "", nil); err != nil {
 			log.Fatalf("chat: %v", err)
 		}
 		fmt.Printf("%snew session %s (agent %s)%s\n", cDim, sid, *agent, cReset)
