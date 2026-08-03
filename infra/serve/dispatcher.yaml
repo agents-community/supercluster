@@ -21,7 +21,7 @@ spec:
       serviceAccountName: agentplane-serve
       containers:
       - name: dispatcher
-        image: gcr.io/PROJECT_ID/ate-images/agentplane-serve:latest  # same image as serve; set on deploy
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v16  # same image as serve
         command: ["/usr/local/bin/agentplane"]
         args: ["dispatcher", "-idle-after=120s", "-interval=30s"]
         env:
@@ -30,7 +30,21 @@ spec:
         - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
         # escrow-before-suspend needs the snapshot bucket; set to the same
         # value as serve's AGENTPLANE_BUCKET on deploy.
-        - { name: AGENTPLANE_BUCKET, value: "" }
+        - { name: AGENTPLANE_BUCKET, value: "snapshot-substrate-test-project-28d42275-7fed-43e6-a9a" }
+        volumeMounts:
+        # Same client auth as serve: Substrate's control plane rejects
+        # unauthenticated gRPC clients, and without this the dispatcher fails
+        # every pass with `Unauthenticated: missing bearer token` — auto-sleep
+        # silently stops and pool workers are never reclaimed.
+        - { name: ateapi-token, mountPath: /run/ateapi-token, readOnly: true }
         resources:
           requests: { cpu: 20m, memory: 64Mi }
           limits: { memory: 128Mi }
+      volumes:
+      - name: ateapi-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: api.ate-system.svc
+              expirationSeconds: 3600
+              path: token

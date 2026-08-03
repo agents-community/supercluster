@@ -80,12 +80,49 @@ func ateapiTLS() *tls.Config {
 
 var insecureAteapiOnce sync.Once
 
+// ateapiToken presents a Kubernetes projected ServiceAccount token as a gRPC
+// bearer credential. Since Substrate added component authentication, the
+// control plane rejects unauthenticated clients with
+// `Unauthenticated: missing bearer token` — the server validates the JWT
+// against the cluster issuer and the audience api.ate-system.svc.
+//
+// The file is re-read on every RPC: kubelet rotates a projected token well
+// before its hour is up, and caching it would start failing after ~1h in a way
+// that looks like an intermittent control-plane fault.
+type ateapiToken struct{ path string }
+
+func (t ateapiToken) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+	b, err := os.ReadFile(t.path)
+	if err != nil {
+		return nil, fmt.Errorf("read ateapi token %s: %w", t.path, err)
+	}
+	return map[string]string{"authorization": "Bearer " + strings.TrimSpace(string(b))}, nil
+}
+
+// RequireTransportSecurity is true: the token must never cross a plaintext hop.
+func (ateapiToken) RequireTransportSecurity() bool { return true }
+
+// ateapiCreds returns the per-RPC credential when a projected token is mounted
+// (AGENTPLANE_ATEAPI_TOKEN_FILE, default the standard mount path), or nil when
+// it is absent — a CLI run outside the cluster has no ServiceAccount, and
+// should fail on the server's terms rather than on a missing file here.
+func ateapiCreds() []grpc.DialOption {
+	path := env("AGENTPLANE_ATEAPI_TOKEN_FILE", "/run/ateapi-token/token")
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	return []grpc.DialOption{grpc.WithPerRPCCredentials(ateapiToken{path: path})}
+}
+
 func (s sessionCtx) dial() (ateapipb.ControlClient, func(), error) {
-	conn, err := grpc.NewClient(s.ateapi,
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(ateapiTLS())),
 		// Client spans for CreateActor/SuspendActor/…: no-op unless a tracer
 		// provider is installed (i.e. under `serve` with OTLP configured).
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	}
+	opts = append(opts, ateapiCreds()...)
+	conn, err := grpc.NewClient(s.ateapi, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial ateapi: %w", err)
 	}
