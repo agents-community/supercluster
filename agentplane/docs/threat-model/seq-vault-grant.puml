@@ -16,8 +16,8 @@ note right of sm : value never returned by the API afterwards
 
 == 2. session create → grant ==
 User -> serve : POST /v1/sessions {"agent":"starter"}
-serve -> serve : names = templateCredentials(agent)\ngrant = HMAC(sid,user,names,exp=<b>now+30d</b>)\n<color:#CC0000>key == HAND_ADMIN_TOKEN (F3), TTL 30d (F4)</color>
-serve -> hand : POST /admin/grant  {serveBase, grant, credentials}\nBearer HAND_ADMIN_TOKEN (shared by every hand)
+serve -> serve : names = templateCredentials(agent)\ngrant = HMAC(sid,user,names,exp=<b>now+10min</b>)\n<color:#007700>key = AGENTPLANE_GRANT_KEY, serve-only (F3 fixed)\nTTL 10 min (F4 fixed)</color>
+serve -> hand : POST /admin/grant  {serveBase, grant, credentials}\nBearer HAND_ADMIN_TOKEN <color:#CC0000>(still shared by every hand)</color>
 note right of hand : no secret VALUE in this message — only the grant
 
 == 3. hand pulls the value ==

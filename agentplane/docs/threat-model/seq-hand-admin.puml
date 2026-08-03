@@ -17,7 +17,9 @@ hand -> hand : adminAuthed(): compare Bearer to HAND_ADMIN_TOKEN
 note over hand, other #FFE4E4
   The token is <b>the same in every hand</b> (one Secret, mounted everywhere)
   and it is <b>also the grant-signing key</b> (serve.go:174).
-  With <b>no NetworkPolicy (F5)</b>, model-generated code in one hand can:
+  Substrate NetworkPolicies now block <b>inbound</b> actor-to-actor traffic,
+  but <b>egress is unrestricted (F5)</b> — so model-generated code in one hand
+  can still initiate:
    1. read its own env → obtain the token,
    2. reach h-<other> directly → drive another session's admin plane,
    3. sign its own grants → pull ANY user's vault credentials.

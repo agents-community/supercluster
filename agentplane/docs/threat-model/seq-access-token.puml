@@ -23,7 +23,8 @@ else allowlisted
 end
 
 note over who, sec #FFE4E4
-  <b>F7</b>: no rate limiting, no second factor — email alone is the credential.
+  <b>F7</b>: rate-limited now (10/min per IP, 5/min per email) — but still
+  no second factor, so email alone remains the credential.
   <b>F1</b>: the resulting token can read/write <b>every user's</b> sessions,
   because no route compares the session to its owner.
   Verification is constant-time ✅ (subtle.ConstantTimeCompare).
