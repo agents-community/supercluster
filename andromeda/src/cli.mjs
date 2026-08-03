@@ -119,7 +119,8 @@ async function runCred(client) {
 async function runAgent(client) {
   const sub = process.argv[3];
   if (sub === "ls" || sub === "list") {
-    for (const a of await client.agents()) console.log(`${a.name.padEnd(18)} ${a.harness.padEnd(12)} ${a.phase}`);
+    for (const a of await client.agents())
+      console.log(`${a.name.padEnd(18)} ${a.harness.padEnd(12)} ${String(a.version ? "v" + a.version : "-").padEnd(5)} ${a.phase}`);
     process.exit(0);
   }
   if (sub === "create") {
@@ -155,8 +156,21 @@ if (positional === "logout") {
   process.exit(0);
 }
 if (positional === "whoami") {
-  if (!cfg.token) fail("not logged in — run: andromeda login");
-  console.log(`user: ${cfg.user || "(unknown)"}\nurl:  ${cfg.url}`);
+  // Resolve exactly like every other command (flags > env > config). Reading
+  // only the config file made `whoami` report "not logged in" while `agent ls`
+  // and `sessions` worked fine off ANDROMEDA_TOKEN — the one command you run
+  // to check your setup was the one that lied about it.
+  const who = {
+    url: arg("url") ?? process.env.ANDROMEDA_URL ?? cfg.url,
+    token: arg("token") ?? process.env.ANDROMEDA_TOKEN ?? cfg.token,
+  };
+  if (!who.token) fail("not logged in — run: andromeda login (or set ANDROMEDA_TOKEN)");
+  const from = arg("token") !== undefined ? "--token flag"
+    : process.env.ANDROMEDA_TOKEN ? "ANDROMEDA_TOKEN"
+    : configPath;
+  // Where the credentials came from is the thing you actually need when the
+  // client is talking to a different cluster than you expect.
+  console.log(`user: ${cfg.user || "(unknown)"}\nurl:  ${who.url}\nfrom: ${from}`);
   process.exit(0);
 }
 if (positional === "login") {
@@ -213,7 +227,8 @@ if (!sessionId && !agentName) {
   // No target: show what exists and how to attach, then exit.
   const [agents, sessions] = await Promise.all([client.agents(), client.sessions()]);
   console.log("agents:");
-  for (const a of agents) console.log(`  ${a.name.padEnd(16)} ${a.harness.padEnd(12)} ${a.phase}`);
+  for (const a of agents)
+    console.log(`  ${a.name.padEnd(16)} ${a.harness.padEnd(12)} ${String(a.version ? "v" + a.version : "-").padEnd(5)} ${a.phase}`);
   console.log("\nlive sessions:");
   if (!sessions.length) console.log("  (none)");
   for (const s of sessions) console.log(`  ${s.id.padEnd(20)} ${s.agent.padEnd(16)} ${s.harness.padEnd(12)} ${s.status}`);

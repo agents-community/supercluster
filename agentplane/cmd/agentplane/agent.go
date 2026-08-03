@@ -192,6 +192,31 @@ func templateExists(ctx context.Context, sc sessionCtx, name string) bool {
 // templateHarnesses maps agent name → harness label in one kubectl call.
 // Used to enrich session objects (a session's harness = its agent's harness;
 // derived, per the stateless-control-plane rule — never stored).
+// templateAgents maps each ActorTemplate to the LOGICAL agent it is a version
+// of. Sessions run on a version template (`starter-v2`), but every client —
+// and every user — thinks in agent names, so the API must not leak the
+// template. Templates predating versioning carry no label and map to
+// themselves.
+func templateAgents(ctx context.Context, sc sessionCtx) (map[string]string, error) {
+	out, err := runKubectl(ctx, "get", "actortemplates", "-n", sc.templateNS,
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.metadata.labels.agentplane\.io/agent}{"\n"}{end}`)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name, agent, _ := strings.Cut(line, " ")
+		if name == "" {
+			continue
+		}
+		if agent == "" {
+			agent = name
+		}
+		m[name] = agent
+	}
+	return m, nil
+}
+
 func templateHarnesses(ctx context.Context, sc sessionCtx) (map[string]string, error) {
 	out, err := runKubectl(ctx, "get", "actortemplates", "-n", sc.templateNS,
 		"-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.metadata.labels.agentplane\.io/harness}{"\n"}{end}`)

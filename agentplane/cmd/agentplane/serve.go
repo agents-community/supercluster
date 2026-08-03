@@ -773,6 +773,7 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		Harness string `json:"harness"`
 		Status  string `json:"status"`
 	}
+	logicalAgents, _ := templateAgents(r.Context(), s.sc) // best-effort enrich
 	items := []item{}
 	for _, a := range actors {
 		name := a.GetMetadata().GetName()
@@ -780,8 +781,13 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		if filtering && !s.owners.mine(sid, me) {
 			continue // not yours — not listed (F1)
 		}
-		agent := a.GetActorTemplateName()
-		items = append(items, item{ID: sid, Agent: agent, Harness: harnesses[agent],
+		// Same rule as GET: the logical agent, not the version template.
+		tmplName := a.GetActorTemplateName()
+		agent := tmplName
+		if logical, ok := logicalAgents[tmplName]; ok && logical != "" {
+			agent = logical
+		}
+		items = append(items, item{ID: sid, Agent: agent, Harness: harnesses[tmplName],
 			Status: derivedStatus(s.sc, name, a.GetStatus().String())})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
@@ -802,7 +808,17 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		if a.GetMetadata().GetName() != brain {
 			continue
 		}
-		out := map[string]any{"id": sid, "agent": a.GetActorTemplateName(), "harness": harnesses[a.GetActorTemplateName()]}
+		// Report the LOGICAL agent, never the version template. A session minted
+		// from `starter` runs on `starter-v2`, and a client filtering its own
+		// sessions by agent name would match nothing (#32 regression).
+		tmplName := a.GetActorTemplateName()
+		agentName := tmplName
+		if agents, err := templateAgents(r.Context(), s.sc); err == nil {
+			if logical, ok := agents[tmplName]; ok && logical != "" {
+				agentName = logical
+			}
+		}
+		out := map[string]any{"id": sid, "agent": agentName, "harness": harnesses[tmplName]}
 		// Stored metadata first: it is readable while the mind SLEEPS, which the
 		// live probe below is not (probing resumes a suspended actor, undoing
 		// the auto-sleep that just saved the worker). A sleeping session used to
@@ -819,6 +835,13 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 			}
 			if m.Title != "" {
 				out["title"] = m.Title
+			}
+			if m.Version > 0 {
+				out["version"] = m.Version // the agent version this mind runs
+			}
+			if m.Agent != "" {
+				agentName = m.Agent // the store knows the name the user asked for
+				out["agent"] = agentName
 			}
 		}
 		// Probe /healthz at most ONCE, and only when awake (probing wakes a
