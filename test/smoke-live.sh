@@ -68,9 +68,10 @@ echo "== 6. agent replies (tool exec through the hand) =="
 deadline=$(( $(date +%s) + TURN_TIMEOUT ))
 while :; do
   events=$(curl -fsS "${auth[@]}" "$AGENTPLANE_URL/v1/sessions/$sid/message" || true)
-  if echo "$events" | grep -q 'mcp__hand__'; then
-    echo "$events" | grep -q 'runsc' \
-      || fail "hand tool ran but the sandbox hostname is missing — did it execute?"
+  # Both must be present in the SAME snapshot: the tool_use event is recorded
+  # before its result, so matching on mcp__hand__ alone fires mid-turn, before
+  # the output exists, and reports a failure that is only a race.
+  if echo "$events" | grep -q 'mcp__hand__' && echo "$events" | grep -q 'runsc'; then
     pass "agent executed the command ON THE HAND and reported the output"
     break
   fi
