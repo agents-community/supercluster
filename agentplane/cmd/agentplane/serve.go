@@ -127,11 +127,11 @@ type server struct {
 	client   *http.Client // outbound to atenet, trace-propagating
 	log      *slog.Logger
 	wakeHist metric.Float64Histogram // session wake/accept latency (cold-start KPI); nil when metrics off
-	vault    *vault          // credential vault (Secret Manager); nil when unconfigured
-	grantKey []byte          // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
-	emails   *emailAllowlist // self-service /v1/access: emails allowed to self-issue a token
-	owners   *ownerStore     // session → owning user (threat-model F1)
-	limiter  *accessLimiter  // throttles unauthenticated /v1/access (F7)
+	vault    *vault                  // credential vault (Secret Manager); nil when unconfigured
+	grantKey []byte                  // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
+	emails   *emailAllowlist         // self-service /v1/access: emails allowed to self-issue a token
+	owners   *ownerStore             // session → owning user (threat-model F1)
+	limiter  *accessLimiter          // throttles unauthenticated /v1/access (F7)
 }
 
 func runServe(args []string) {
@@ -180,9 +180,16 @@ func runServe(args []string) {
 	}
 
 	mux := http.NewServeMux()
+	// Liveness: this process is up. Deliberately dependency-free — a failing
+	// dependency must not get the pod killed and restarted, which fixes nothing.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	// Readiness: can we actually serve? /healthz returned 200 throughout a total
+	// outage (valkey CLUSTERDOWN → every actor call failing), because listening
+	// is not the same as working. This exercises the real chain — serve → ateapi
+	// → valkey — and names the component that failed.
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	// Self-service onboarding: an allowlisted email exchanges itself for a token.
 	// Unauthenticated (it's how you get your first token); gated by the allowlist.
 	mux.HandleFunc("POST /v1/access", s.handleAccess)
@@ -305,6 +312,53 @@ func initMetrics(logger *slog.Logger) (func(), metric.Float64Histogram) {
 		defer cancel()
 		_ = mp.Shutdown(ctx)
 	}, hist
+}
+
+// handleReadyz reports whether serve can actually reach the control plane.
+// Unauthenticated on purpose: it exposes no data, and a probe that needs a
+// token is one more thing that can fail for reasons unrelated to health.
+func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	ctrl, closeFn, err := s.sc.dial()
+	if err != nil {
+		s.notReady(w, "ateapi", "cannot dial the control plane", err)
+		return
+	}
+	defer closeFn()
+
+	// ListActors is the cheapest call that proves the whole chain: it
+	// authenticates to ateapi and reads the registry, which lives in valkey.
+	if _, err := ctrl.ListActors(ctx, &ateapipb.ListActorsRequest{}); err != nil {
+		s.notReady(w, failedComponent(err), "control plane is not serving", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ready": true})
+}
+
+// failedComponent maps a control-plane error to the thing an operator should
+// go look at, so a 503 points somewhere instead of needing a bisect.
+func failedComponent(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "CLUSTERDOWN"), strings.Contains(msg, "shard"):
+		return "valkey"
+	case strings.Contains(msg, "Unauthenticated"):
+		return "ateapi-auth"
+	case strings.Contains(msg, "protojson"), strings.Contains(msg, "unknown field"):
+		return "schema-drift" // stored records the running binary cannot parse
+	}
+	return "ateapi"
+}
+
+// notReady answers 503 naming the broken component; the underlying error is
+// logged server-side and never returned, like every other error here.
+func (s *server) notReady(w http.ResponseWriter, component, msg string, err error) {
+	s.log.Error("readiness check failed", "component", component, "err", err)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"ready": false, "component": component, "message": msg,
+	})
 }
 
 // ---------- middleware & helpers ----------

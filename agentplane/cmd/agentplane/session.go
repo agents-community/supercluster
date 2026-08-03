@@ -439,9 +439,19 @@ func escrowTranscript(sc sessionCtx, sid, brain string) {
 		return
 	}
 	obj := fmt.Sprintf("gs://%s/transcripts/%s/events-%d.json", bucket, sid, time.Now().Unix())
-	cmd := exec.Command("gcloud", "storage", "cp", "-", obj)
+	// Bounded: escrow runs on the delete path and inside the dispatcher's sweep,
+	// so an unbounded `gcloud` (auth prompt, network stall) would wedge the
+	// caller indefinitely — in the dispatcher that means auto-sleep stops for
+	// every session, silently. Better to lose one transcript than the loop.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gcloud", "storage", "cp", "-", obj)
 	cmd.Stdin = strings.NewReader(string(data))
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			fmt.Fprintf(os.Stderr, "escrow: upload timed out after 60s — transcript NOT escrowed: %s\n", obj)
+			return
+		}
 		fmt.Fprintf(os.Stderr, "escrow: upload failed: %v %s\n", err, out)
 		return
 	}
