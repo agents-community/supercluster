@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -225,6 +226,10 @@ type agentInfo struct {
 	Harness  string `json:"harness"`
 	Phase    string `json:"phase"`
 	Sessions int    `json:"sessions"`
+	// Version is the newest version of this agent; Sessions counts minds across
+	// ALL of its versions, since an older version still serving sessions is
+	// exactly why its template must not be deleted (#32).
+	Version int `json:"version,omitempty"`
 }
 
 func listAgents(ctx context.Context, sc sessionCtx) ([]agentInfo, error) {
@@ -254,7 +259,11 @@ func listAgents(ctx context.Context, sc sessionCtx) ([]agentInfo, error) {
 	for _, a := range actors {
 		counts[a.GetActorTemplateName()]++
 	}
-	agents := []agentInfo{}
+	// Versions of one agent are separate templates (starter, starter-v2, …).
+	// Collapse them back into a single entry keyed by the logical agent, or a
+	// listing would show every version as if it were a different agent.
+	byAgent := map[string]*agentInfo{}
+	order := []string{}
 	for _, it := range payload.Items {
 		// The hand is infrastructure (execution sandbox), not a user-selectable
 		// agent — hide it so callers only see minds they can talk to.
@@ -265,10 +274,32 @@ func listAgents(ctx context.Context, sc sessionCtx) ([]agentInfo, error) {
 		if harness == "" {
 			harness = "-" // pre-CLI template (e.g. the hand-deployed brain)
 		}
-		agents = append(agents, agentInfo{
-			Name: it.Metadata.Name, Harness: harness,
-			Phase: it.Status.Phase, Sessions: counts[it.Metadata.Name],
-		})
+		// Templates predating versioning carry no agent label; their own name
+		// is the agent name.
+		name := it.Metadata.Labels["agentplane.io/agent"]
+		if name == "" {
+			name = it.Metadata.Name
+		}
+		version := 0
+		if v := it.Metadata.Labels["agentplane.io/version"]; v != "" {
+			version, _ = strconv.Atoi(v)
+		}
+		cur, seen := byAgent[name]
+		if !seen {
+			cur = &agentInfo{Name: name, Harness: harness}
+			byAgent[name] = cur
+			order = append(order, name)
+		}
+		// Sessions accumulate across versions; phase and harness track the
+		// NEWEST version, which is what a new session would be minted from.
+		cur.Sessions += counts[it.Metadata.Name]
+		if version >= cur.Version {
+			cur.Version, cur.Phase, cur.Harness = version, it.Status.Phase, harness
+		}
+	}
+	agents := []agentInfo{}
+	for _, name := range order {
+		agents = append(agents, *byAgent[name])
 	}
 	return agents, nil
 }

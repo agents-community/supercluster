@@ -21,7 +21,7 @@ spec:
         # NOT a placeholder — applying this file must never break the running
         # deployment. `PROJECT_ID`/`:latest` here produced InvalidImageName on
         # a plain `kubectl apply`. Bump the tag here when you deploy.
-        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v19
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v20
         ports: [{ containerPort: 7433, name: http }]
         env:
         # Per-user tokens: serve reads this JSON file ({"user":"token"}) from a

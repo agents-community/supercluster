@@ -114,6 +114,41 @@ Three limits worth knowing before you write a policy:
 Hosts are plain hostnames — a scheme, port, or path is rejected, since those
 are the usual ways an allowlist entry looks right and matches nothing.
 
+## Versions: updating an agent never touches its sessions
+
+`ActorTemplate.spec` is immutable in Substrate, so a changed agent is a **new
+version compiled to a new template** — and the old templates stay put:
+
+```bash
+agentplane agent create -f tutor.yaml     # v1
+# edit the system prompt…
+agentplane agent create -f tutor.yaml     # v2 — sessions on v1 keep running
+```
+
+```
+POST /v1/agents            re-posting an existing name mints the next version
+GET  /v1/agents/{n}/versions   history, newest first, with each spec
+POST /v1/sessions {"agent":"tutor"}              → latest version
+POST /v1/sessions {"agent":"tutor","version":1}  → that exact definition
+```
+
+Sessions **pin** the version they were minted from, so a running mind keeps
+answering on the template it started with. Before this, the only way to change
+an agent was `DELETE ?cascade=true` + recreate, which destroyed every session
+it owned — editing a prompt killed every durable mind using it.
+
+Versions are append-only: a version document is written once and never
+rewritten, so **rollback is a new version** whose spec is copied from an older
+one, and the history stays auditable. Deleting the agent removes every version
+(and refuses, without `?cascade=true`, while any version still has sessions).
+
+Version 1 keeps the bare agent name; later versions are `agent-vN`. An agent
+may therefore not be *named* like a versioned template — `foo-v2` is rejected,
+since it would collide with version 2 of `foo`.
+
+Requires `AGENTPLANE_PROJECT` (Firestore). Without it, agent creation keeps its
+original create-once behavior and re-posting a name still returns `409`.
+
 ## Durable workspace
 
 ```yaml
