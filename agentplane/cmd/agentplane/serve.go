@@ -187,6 +187,12 @@ func runServe(args []string) {
 	if fs, ok := s.owners.(*fsStore); ok {
 		s.agents = fs
 	}
+	// Let the suspend/delete paths persist usage before a mind sleeps or dies
+	// (#42). Package-level because those paths are shared with the CLI, which
+	// has no store.
+	captureUsage = func(ctx context.Context, sid string, u json.RawMessage) {
+		s.owners.touch(ctx, sid, u)
+	}
 
 	mux := http.NewServeMux()
 	// Liveness: this process is up. Deliberately dependency-free — a failing
@@ -912,6 +918,9 @@ func (s *server) handleSessionSuspend(w http.ResponseWriter, r *http.Request) {
 	defer closeFn()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	// Capture cost while the mind is still awake — after the checkpoint it can
+	// only be read by resuming it (#42).
+	recordUsageIfAwake(ctx, ctrl, s.sc, sid, brain)
 	escrowTranscript(s.sc, sid, brain) // escrow-before-checkpoint, best-effort
 	if _, err := ctrl.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: s.sc.atespace, Name: brain},

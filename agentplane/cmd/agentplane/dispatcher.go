@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -24,6 +26,20 @@ func runDispatcher(args []string) {
 	_ = fs.Parse(args)
 
 	sc := newSessionCtx()
+	// The dispatcher is a separate process from serve, so it needs its own
+	// handle on the session store to record usage before it suspends a mind.
+	// Auto-sleep is how most sessions end, so without this the common case
+	// still loses its cost (#42).
+	if project := env("AGENTPLANE_PROJECT", os.Getenv("GOOGLE_CLOUD_PROJECT")); project != "" {
+		if store, err := newFirestoreStore(context.Background(), project); err != nil {
+			log.Printf("warn: usage capture disabled (%v) — suspended sessions will not record cost", err)
+		} else {
+			captureUsage = func(ctx context.Context, sid string, u json.RawMessage) {
+				store.touch(ctx, sid, u)
+			}
+			log.Printf("usage capture enabled (firestore %s)", project)
+		}
+	}
 	for {
 		dispatcherPass(sc, *idleAfter)
 		if *once {
@@ -101,6 +117,13 @@ func dispatcherPass(sc sessionCtx, idleAfter time.Duration) {
 				continue // old image without last_event_at: skip rather than guess
 			}
 			if idleFor >= idleAfter {
+				// This is the path most sessions actually take: nobody deletes
+				// or suspends by hand, they just stop typing. `h` is the probe
+				// we already did to read last_event_at, so the usage is in hand
+				// with no extra call and no risk of waking anything (#42).
+				if captureUsage != nil && len(h.Usage) > 0 {
+					captureUsage(ctx, sid, h.Usage)
+				}
 				escrowTranscript(sc, sid, name)
 				suspend(sid, name)
 				if hand, ok := runningHands[sid]; ok {

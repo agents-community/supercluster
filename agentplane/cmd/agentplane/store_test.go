@@ -154,3 +154,28 @@ func TestUsageRollupAccumulates(t *testing.T) {
 		t.Errorf("input tokens wrong: %d", total.InputTokens)
 	}
 }
+
+// The suspend/delete capture path must never probe a mind that is already
+// asleep — probing resumes it, which burns a checkpoint restore to read a cost
+// number and undoes the auto-sleep that just freed the worker. With no
+// recorder registered (the CLI case) it must also be inert, not panic.
+func TestUsageCaptureIsInertWithoutRecorder(t *testing.T) {
+	saved := captureUsage
+	captureUsage = nil
+	defer func() { captureUsage = saved }()
+	// nil client + nil recorder: must return quietly rather than dereference.
+	recordUsageIfAwake(context.Background(), nil, sessionCtx{}, "sess-a", "b-sess-a")
+}
+
+func TestUsageCaptureSkipsWhenClientAbsent(t *testing.T) {
+	saved := captureUsage
+	called := false
+	captureUsage = func(context.Context, string, json.RawMessage) { called = true }
+	defer func() { captureUsage = saved }()
+	// A nil control client means we cannot check status; capturing anyway would
+	// risk probing (and waking) a suspended actor.
+	recordUsageIfAwake(context.Background(), nil, sessionCtx{}, "sess-a", "b-sess-a")
+	if called {
+		t.Error("captured usage without confirming the actor is RUNNING — this can wake a sleeping mind")
+	}
+}

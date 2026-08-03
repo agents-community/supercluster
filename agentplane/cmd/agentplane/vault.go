@@ -54,6 +54,7 @@ func newVault(ctx context.Context, project string) (*vault, error) {
 }
 
 func (v *vault) parent() string { return "projects/" + v.project }
+
 // secretID maps (user, name) to a Secret Manager id. The user is HASHED, not
 // concatenated (threat-model F8): raw emails are neither id-safe (`@`, `.`)
 // nor unambiguous — "a" + "b-c" and "a-b" + "c" would collide — and hashing
