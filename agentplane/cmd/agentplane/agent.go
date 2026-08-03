@@ -465,6 +465,20 @@ func createSession(ctx context.Context, sc sessionCtx, agent string) (string, er
 				Actor: &ateapipb.ObjectRef{Atespace: sc.atespace, Name: naming.BrainActor(sid)}})
 			return "", fmt.Errorf("create hand actor: %w", err)
 		}
+		// Wait for the hand to actually serve before returning the session.
+		//
+		// A newly created hand takes a few seconds to restore from its golden.
+		// The brain connects to the hand's MCP endpoint once, when its harness
+		// initializes, and Claude Code caches the tool list at that moment — so
+		// a brain that starts first is tool-less for the WHOLE turn. The harness
+		// self-heals by restarting after the turn, but that means the user's
+		// FIRST message silently runs with no tools, which is exactly when they
+		// are deciding whether the product works.
+		//
+		// Bounded and non-fatal: on timeout we continue and let the self-heal
+		// cover it, because a slow hand should delay a session, never fail one.
+		waitHandReady(ctx, sc, sid, handReadyTimeout)
+
 		// Tell the hand who it is: the actor has no ambient identity (no env,
 		// no hostname, and the routed hop drops the Host header), so span
 		// attribution depends on this push. Best-effort like the rest.
@@ -631,6 +645,42 @@ func pushHandIdentity(ctx context.Context, sc sessionCtx, sid string) error {
 }
 
 // agentWantsHand reports whether the agent template is labeled for a paired hand.
+// handReadyTimeout bounds the wait for a new hand to come up. Restores observed
+// at ~5s; this leaves headroom for a cold worker without stalling a session
+// creation indefinitely.
+const handReadyTimeout = 25 * time.Second
+
+// waitHandReady polls the hand's health endpoint until it answers. Returns
+// whether it became ready; callers treat false as "continue anyway".
+func waitHandReady(ctx context.Context, sc sessionCtx, sid string, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	hand := naming.HandActor(sid)
+	url := fmt.Sprintf("http://%s/healthz", sc.atenet)
+	host := naming.ActorDNS(hand, sc.atespace)
+	client := &http.Client{Timeout: 3 * time.Second}
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return false
+		}
+		req.Host = host
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return true
+			}
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	log.Printf("warn: hand for %s not ready within %s — first turn may run tool-less "+
+		"until the harness reconnects", sid, budget)
+	return false
+}
+
 func agentWantsHand(ctx context.Context, sc sessionCtx, agent string) bool {
 	out, err := runKubectl(ctx, "get", "actortemplate", "-n", sc.templateNS,
 		"-o", `jsonpath={.metadata.labels.agentplane\.io/hand}`, "--", agent)
