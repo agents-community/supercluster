@@ -341,7 +341,16 @@ const pauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272
 
 // CompileTemplate renders the ActorTemplate (as JSON) realizing this agent.
 // namespace/pool wiring matches deploy/brain.yaml.tmpl; bucket hosts snapshots.
+// CompileTemplate compiles the spec to its ActorTemplate, named for the agent.
 func (s *AgentSpec) CompileTemplate(namespace, bucket string) ([]byte, error) {
+	return s.CompileVersion(namespace, bucket, s.Name, 0)
+}
+
+// CompileVersion compiles the spec as a SPECIFIC template name, stamping the
+// logical agent and version as labels (#32). Versions are separate templates —
+// ActorTemplate.spec is immutable, so a change is a new artifact — and the
+// labels are what group them back into one agent for listing.
+func (s *AgentSpec) CompileVersion(namespace, bucket, templateName string, version int) ([]byte, error) {
 	if bucket == "" {
 		return nil, fmt.Errorf("bucket required (set AGENTPLANE_BUCKET)")
 	}
@@ -389,6 +398,12 @@ func (s *AgentSpec) CompileTemplate(namespace, bucket string) ([]byte, error) {
 	labels := map[string]string{
 		"agentplane.io/harness": s.Harness,
 		"agentplane.io/managed": "true",
+		// The logical agent this template is a version OF. Without it, `starter`
+		// and `starter-v2` look like two unrelated agents in a template listing.
+		"agentplane.io/agent": s.Name,
+	}
+	if version > 0 {
+		labels["agentplane.io/version"] = fmt.Sprint(version)
 	}
 	if s.Hand {
 		labels["agentplane.io/hand"] = "true" // serve pairs an h-<id> per session
@@ -397,7 +412,7 @@ func (s *AgentSpec) CompileTemplate(namespace, bucket string) ([]byte, error) {
 		"apiVersion": "ate.dev/v1alpha1",
 		"kind":       "ActorTemplate",
 		"metadata": map[string]any{
-			"name":      s.Name,
+			"name":      templateName,
 			"namespace": namespace,
 			"labels":    labels,
 		},

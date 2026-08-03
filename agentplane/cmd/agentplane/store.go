@@ -45,7 +45,7 @@ type sessionMeta struct {
 // sessionStore is the ownership + metadata registry. The ConfigMap
 // implementation remains for local/dev clusters with no GCP project.
 type sessionStore interface {
-	claim(ctx context.Context, sid, user, agent string) error
+	claim(ctx context.Context, sid, user, agent string, version int) error
 	release(ctx context.Context, sid string)
 	mine(sid, user string) bool
 	owner(sid string) (string, bool)
@@ -90,7 +90,7 @@ func (f *fsStore) doc(sid string) *firestore.DocumentRef {
 	return f.cl.Collection(sessionsCollection).Doc(sid)
 }
 
-func (f *fsStore) claim(ctx context.Context, sid, user, agent string) error {
+func (f *fsStore) claim(ctx context.Context, sid, user, agent string, version int) error {
 	if f.cl == nil {
 		return fmt.Errorf("session store unavailable")
 	}
@@ -100,7 +100,8 @@ func (f *fsStore) claim(ctx context.Context, sid, user, agent string) error {
 	// impossible) fail the second rather than silently reassigning ownership —
 	// the lost-update bug the ConfigMap store had by construction.
 	_, err := f.doc(sid).Create(ctx, sessionMeta{
-		Owner: user, Agent: agent, CreatedAt: now, LastActiveAt: now,
+		Owner: user, Agent: agent, Version: version,
+		CreatedAt: now, LastActiveAt: now,
 	})
 	if status.Code(err) == codes.AlreadyExists {
 		return fmt.Errorf("session %s already claimed", sid)
@@ -292,7 +293,7 @@ func (f *fsStore) ownedBy(ctx context.Context, user string) (map[string]sessionM
 // races — and stores no metadata, so it is a dev/no-GCP fallback only.
 type cmStore struct{ *ownerStore }
 
-func (c cmStore) claim(ctx context.Context, sid, user, _ string) error {
+func (c cmStore) claim(ctx context.Context, sid, user, _ string, _ int) error {
 	return c.ownerStore.claim(ctx, sid, user)
 }
 func (c cmStore) release(ctx context.Context, sid string)        { c.ownerStore.release(ctx, sid) }

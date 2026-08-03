@@ -131,6 +131,7 @@ type server struct {
 	grantKey []byte                  // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
 	emails   *emailAllowlist         // self-service /v1/access: emails allowed to self-issue a token
 	owners   sessionStore            // session ownership + durable metadata (F1, #36)
+	agents   *fsStore                // agent versioning (#32); nil without Firestore
 	limiter  *accessLimiter          // throttles unauthenticated /v1/access (F7)
 }
 
@@ -181,6 +182,12 @@ func runServe(args []string) {
 		limiter: newAccessLimiter(),
 	}
 
+	// Versioning needs the concrete store; on the ConfigMap fallback it stays
+	// nil and agent creation keeps its original create-once behavior.
+	if fs, ok := s.owners.(*fsStore); ok {
+		s.agents = fs
+	}
+
 	mux := http.NewServeMux()
 	// Liveness: this process is up. Deliberately dependency-free — a failing
 	// dependency must not get the pod killed and restarted, which fixes nothing.
@@ -197,6 +204,7 @@ func runServe(args []string) {
 	mux.HandleFunc("POST /v1/access", s.handleAccess)
 	mux.HandleFunc("GET /v1/agents", s.auth(s.handleAgentList))
 	mux.HandleFunc("POST /v1/agents", s.auth(s.handleAgentCreate))
+	mux.HandleFunc("GET /v1/agents/{id}/versions", s.auth(s.handleAgentVersions))
 	mux.HandleFunc("DELETE /v1/agents/{id}", s.auth(s.handleAgentDelete))
 	mux.HandleFunc("POST /v1/sessions", s.auth(s.handleSessionCreate))
 	mux.HandleFunc("GET /v1/sessions", s.auth(s.handleSessionList))
@@ -493,6 +501,68 @@ func (s *server) handleAgentCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// A name that looks like a versioned template would collide with a real
+	// version of the same agent — same template name, different spec.
+	if versionSuffixRe.MatchString(spec.Name) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+			"agent name %q ends in a version suffix, which is reserved for agent versions", spec.Name))
+		return
+	}
+	if s.agents == nil {
+		s.createAgentUnversioned(w, r, spec, raw)
+		return
+	}
+
+	// Versioned path: re-creating an existing agent mints the NEXT version
+	// rather than failing. Prior templates are left alone, so every running
+	// session keeps answering on the template it was minted from — updating an
+	// agent used to require a cascade delete that destroyed all of them (#32).
+	version, err := s.agents.nextVersion(r.Context(), spec.Name, userOf(r))
+	if err != nil {
+		s.fail(w, r, http.StatusBadGateway, "failed to reserve an agent version", err)
+		return
+	}
+	template := templateFor(spec.Name, version)
+	tmpl, err := spec.CompileVersion(s.sc.templateNS, os.Getenv("AGENTPLANE_BUCKET"), template, version)
+	if err != nil {
+		s.fail(w, r, http.StatusInternalServerError, "failed to compile agent spec", err)
+		return
+	}
+	if err := applyAgent(r.Context(), s.sc, template, tmpl); err != nil {
+		// v1 already existing means an agent created before versioning: adopt it
+		// as version 1 instead of failing, so pre-existing agents stay usable.
+		if version == 1 && strings.Contains(err.Error(), "already exists") {
+			s.log.Info("adopted pre-existing agent as version 1", "agent", spec.Name)
+		} else {
+			s.fail(w, r, http.StatusBadGateway, "failed to create agent", err)
+			return
+		}
+	}
+	// Record only AFTER the template applies: a version in the history that has
+	// no template behind it would resolve to a session that cannot start.
+	if err := s.agents.recordVersion(r.Context(), spec.Name, agentVersion{
+		Version: version, Spec: string(raw), Template: template,
+		Harness: spec.Harness, CreatedBy: userOf(r), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		s.log.Error("agent version recorded in Substrate but not in the store",
+			"agent", spec.Name, "version", version, "err", err)
+	}
+	span(r).SetAttributes(
+		attribute.String("agentplane.agent", spec.Name),
+		attribute.Int("agentplane.agent_version", version))
+	s.log.Info("agent version created", "agent", spec.Name, "version", version,
+		"template", template, "harness", spec.Harness)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"name": spec.Name, "harness": spec.Harness, "version": version,
+		"template": template, "phase": "Pending",
+		"note": "golden bake in progress — poll GET /v1/agents until Ready. " +
+			"Existing sessions keep running on their own version.",
+	})
+}
+
+// createAgentUnversioned is the original create-once behavior, used when no
+// Firestore project is configured (local/dev clusters).
+func (s *server) createAgentUnversioned(w http.ResponseWriter, r *http.Request, spec *agentspec.AgentSpec, _ []byte) {
 	tmpl, err := spec.CompileTemplate(s.sc.templateNS, os.Getenv("AGENTPLANE_BUCKET"))
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "failed to compile agent spec", err)
@@ -500,7 +570,8 @@ func (s *server) handleAgentCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := applyAgent(r.Context(), s.sc, spec.Name, tmpl); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
-			writeErr(w, http.StatusConflict, fmt.Sprintf("agent %q already exists", spec.Name))
+			writeErr(w, http.StatusConflict, fmt.Sprintf(
+				"agent %q already exists (versioning needs AGENTPLANE_PROJECT)", spec.Name))
 			return
 		}
 		s.fail(w, r, http.StatusBadGateway, "failed to create agent", err)
@@ -514,6 +585,45 @@ func (s *server) handleAgentCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAgentVersions lists an agent's version history, newest first.
+func (s *server) handleAgentVersions(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("id")
+	if !naming.IsAgentName(name) {
+		writeErr(w, http.StatusBadRequest, "invalid agent name")
+		return
+	}
+	if s.agents == nil {
+		writeErr(w, http.StatusNotImplemented, "agent versioning requires AGENTPLANE_PROJECT")
+		return
+	}
+	vs, err := s.agents.versions(r.Context(), name)
+	if err != nil {
+		s.fail(w, r, http.StatusBadGateway, "failed to list agent versions", err)
+		return
+	}
+	if len(vs) == 0 {
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("no agent %q", name))
+		return
+	}
+	type item struct {
+		Version   int    `json:"version"`
+		Template  string `json:"template"`
+		Harness   string `json:"harness"`
+		CreatedBy string `json:"created_by"`
+		CreatedAt string `json:"created_at"`
+		Spec      string `json:"spec"`
+	}
+	out := make([]item, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, item{
+			Version: v.Version, Template: v.Template, Harness: v.Harness,
+			CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt.Format(time.RFC3339),
+			Spec: v.Spec,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agent": name, "versions": out})
+}
+
 // handleAgentDelete mirrors `agent delete`: 409 with the stranded-session list
 // unless ?cascade=true (finding #4 — deleting the template strands sessions).
 // {id} is the agent's name — same convention as /v1/sessions/{id}.
@@ -524,7 +634,48 @@ func (s *server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cascade := r.URL.Query().Get("cascade") == "true"
+
+	// Every version is its own template, and sessions may be pinned to ANY of
+	// them — an older version still serving minds is precisely why its template
+	// survived the update. Delete newest-first so the agent's own name goes
+	// last: if an intermediate delete fails, `starter` still exists and the
+	// whole operation stays retryable instead of half-applied.
+	var templates []string
+	if s.agents != nil {
+		if vs, err := s.agents.versions(r.Context(), name); err == nil {
+			for _, v := range vs { // already newest-first
+				if v.Template != name {
+					templates = append(templates, v.Template)
+				}
+			}
+		}
+	}
+	var cascaded []string
+	for _, t := range templates {
+		sids, err := deleteAgent(r.Context(), s.sc, t, cascade)
+		var hs errHasSessions
+		if errors.As(err, &hs) {
+			// Report against the agent the caller asked about, not the internal
+			// version template they never named.
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": map[string]string{"code": "conflict",
+					"message": "agent has live sessions on an earlier version — retry with ?cascade=true"},
+				"sessions": hs.Sessions, "version_template": t,
+			})
+			return
+		}
+		if err != nil && !strings.Contains(err.Error(), "no agent") {
+			s.fail(w, r, http.StatusBadGateway, "failed to delete an agent version", err)
+			return
+		}
+		cascaded = append(cascaded, sids...)
+	}
+
 	sids, err := deleteAgent(r.Context(), s.sc, name, cascade)
+	sids = append(sids, cascaded...)
+	if err == nil && s.agents != nil {
+		s.agents.forgetAgent(r.Context(), name) // history goes with the agent
+	}
 	var hasSess errHasSessions
 	switch {
 	case errors.As(err, &hasSess):
@@ -544,8 +695,9 @@ func (s *server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Agent  string `json:"agent"`
-		APIKey string `json:"apiKey"` // BYO-key: ephemeral, forwarded to the brain, never stored/logged
+		Agent   string `json:"agent"`
+		Version int    `json:"version"` // pin a specific agent version (#32); 0 = latest
+		APIKey  string `json:"apiKey"`  // BYO-key: ephemeral, forwarded to the brain, never stored/logged
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -558,7 +710,25 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid agent name")
 		return
 	}
-	sid, err := createSession(r.Context(), s.sc, in.Agent)
+	// Resolve the agent to a concrete template. New sessions take the latest
+	// version; an explicit version reproduces an earlier definition exactly.
+	// Templates other than the newest are never deleted while sessions pin
+	// them, which is what lets an agent be updated without killing minds.
+	template, version := in.Agent, 0
+	if s.agents != nil {
+		if in.Version > 0 {
+			t, err := s.agents.templateForVersion(r.Context(), in.Agent, in.Version)
+			if err != nil {
+				writeErr(w, http.StatusNotFound, fmt.Sprintf(
+					"agent %q has no version %d", in.Agent, in.Version))
+				return
+			}
+			template, version = t, in.Version
+		} else {
+			template, version = s.agents.latestTemplate(r.Context(), in.Agent)
+		}
+	}
+	sid, err := createSession(r.Context(), s.sc, template)
 	if err != nil {
 		s.fail(w, r, http.StatusBadGateway, "failed to create session", err)
 		return
@@ -573,7 +743,7 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	// Best-effort: the session is usable without it; the hand just won't have the
 	// credential until re-granted. Must precede the first message.
 	// Claim ownership BEFORE anything else can touch the session (F1).
-	if err := s.owners.claim(r.Context(), sid, userOf(r), in.Agent); err != nil {
+	if err := s.owners.claim(r.Context(), sid, userOf(r), in.Agent, version); err != nil {
 		s.log.Error("owner claim failed — session left unowned", "session", sid, "user", userOf(r), "err", err)
 	}
 	if err := s.grantHandCredentials(r.Context(), sid, userOf(r), in.Agent); err != nil {
