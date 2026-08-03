@@ -170,6 +170,7 @@ Run `andromeda` with no arguments any time to see the live list.
 | agent replies but does nothing useful | make sure your model key env var is `export`ed (a plain `VAR=…` won't reach the process) |
 | first message is slow | that's a sleeping mind waking from its checkpoint — it's quick after that |
 | `node: bad option` / crashes | you need Node 18.17+ (`node -v` to check) |
+| `sh: 1: andromeda: not found` from `npx` | you're inside a checkout of andromeda itself. npx sees the local `package.json`, assumes the package is already installed, and looks for a `node_modules/.bin/andromeda` that a package never has for itself. Run it from any other directory, or use `node src/cli.mjs` here, or `npm link` once. |
 
 ---
 
