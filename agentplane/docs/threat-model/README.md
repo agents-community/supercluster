@@ -98,26 +98,25 @@ attacking, drawn as deployed rather than as designed.
 
 ## 3. Findings
 
-Ranked severity × likelihood. Filed: **F1 → #19**, **F2 → #20**, **F3/F4 → #21**, **F5 → #22**.
+**Open findings first, then the fixed ones as a table.** Ids are stable — F5 keeps
+its number even though it is now a different (narrower) finding, because issues
+and commits reference them. F9/F11/F12 are presented together: they were three
+entries for one absent component and read as three separate problems.
 
-### F1 — CRITICAL — **FIXED** — No per-session ownership: any token reads/writes any session
-*Spoofing / Information disclosure / Tampering.* `pathSession()`
-validates the id's **shape** and nothing else; `handleSessionGet/Send/Delete/
-Suspend` never compare the session to `userOf(r)`. `handleSessionList`
-(`handleSessionList()`) listed **all** sessions cluster-wide. The authenticated user
-label is used only for vault namespacing and log attribution.
+Filed: **F1 → #19**, **F2 → #20**, **F3/F4 → #21**, **F5 → #22/#25**.
 
-> Any allowlisted tester can enumerate every session, read other people's
-> conversations, inject messages into them, and delete them. With ~10 testers
-> this is a live multi-tenancy hole, not a theoretical one.
+### Fixed (kept for the audit trail)
 
-**Fixed.** `ownedSession()` gates every session-scoped route and answers **404,
-not 403**, so ids cannot be enumerated by probing for the difference; the list is
-filtered by owner. Ownership was first held in a ConfigMap and now lives in
-Firestore (`sessions/{sid}.owner`), which removed that store's 1 MiB ceiling and
-its lost-update race — a dropped owner locked the creator out of their own
-session. Claims are create-only, so a claim can never reassign ownership.
-Unowned sessions remain operator-only, so a store outage can only ever deny.
+These were real and are closed. Detail lives in the PRs; what matters here is
+that the control exists and where it stops.
+
+| | Was | Now | Still not covered |
+|---|---|---|---|
+| **F1** CRITICAL | any token read, wrote and deleted any session; list showed all sessions cluster-wide | `ownedSession()` gates every session route and answers **404, not 403** so ids can't be enumerated; list filtered by owner; ownership in Firestore, claims create-only | — |
+| **F3** HIGH | the grant-signing key *was* `HAND_ADMIN_TOKEN`, mounted in every hand, so one compromised hand could forge grants for any user | separate secrets: `AGENTPLANE_GRANT_KEY` in serve only, `agentplane-hand-admin` in hands (verified distinct on the deployment) | the hand admin token is still **one value shared by every hand**, and grants aren't bound to the presenting actor — `ActorIdentity` mTLS remains the endgame |
+| **F4** HIGH | 30-day grant TTL, no revocation | `grantTTL = 10 * time.Minute`; the hand pulls once at setup, so a leaked grant dies in minutes | revocation still absent by design — bounded by the TTL, now an accepted risk |
+| **F7** MEDIUM | `/v1/access` unthrottled — an allowlisted address could be ground through at speed | `accessLimiter`: 10/min per IP, 5/min per email | **email is still a single factor** and the endpoint is idempotent, so anyone who learns an address gets that user's token. The allowlist is a convenience for a closed tester group, not authentication |
+| **F8** MEDIUM | `agentplane-cred-<user>-<name>` — `(a, b-c)` collided with `(a-b, c)`; emails put `.`/`@` in the id | `vault.secretID()` hashes the user to a fixed-width prefix | — |
 
 ### F2 — CRITICAL — Cleartext HTTP on the public endpoint
 *Information disclosure.* The ingress has no TLS, and `ONBOARDING.md` hands
@@ -127,37 +126,6 @@ unencrypted; `POST /v1/access` returns a token in cleartext.
 
 **Fix:** managed cert + HTTPS redirect before any external tester uses it; treat
 every token/credential issued over HTTP as compromised and rotate.
-
-### F3 — HIGH — **FIXED** — One shared secret is both the hand admin token and the grant-signing key
-*Elevation of privilege.* `grantKey = HAND_ADMIN_TOKEN` (as originally built), and the
-same value is mounted into **every** hand actor (`agentplane-hand-admin`). A
-single compromised hand — i.e. any session where model-generated code reads its
-own env — yields the key that **signs grants**. Since `verifyGrant` checks only
-the HMAC and `exp`, the holder can mint a grant for *any* user and *any*
-credential name and pull it from `/v1/hand/credentials/{name}` (that route is
-deliberately not behind `s.auth` — the grant *is* the auth).
-
-**Fixed (partly).** The keys are separate secrets — `grantSigningKey()` reads
-`AGENTPLANE_GRANT_KEY` (Secret `agentplane-grant-key`, mounted into serve only)
-while hands get `agentplane-hand-admin`. Verified distinct on the deployment. A
-compromised hand therefore no longer yields the grant-signing key.
-
-**Still outstanding:** the hand admin token is one value shared by every hand, so
-a compromised hand can still drive *another* session's hand admin plane, and
-grants are not bound to the presenting actor. Binding them to Substrate
-`ActorIdentity` mTLS remains the endgame — a stolen grant would then be useless
-from anywhere else.
-
-### F4 — HIGH — **FIXED** — 30-day grant TTL
-*Elevation of privilege.* `mintGrant(sid, user, names, 30*24*time.Hour)`
-(`mintGrant()`, as originally built). A grant leaked from actor memory, a checkpoint, or a log stays
-redeemable for a month, and there is **no revocation** (stateless by design).
-
-**Fixed.** `grantTTL = 10 * time.Minute`. The hand pulls once at session setup,
-so a short life costs nothing; a grant leaked from actor memory or a checkpoint
-is dead within ten minutes instead of a month. Revocation is still absent by
-design (grants are stateless) — now an accepted risk rather than an open one,
-because the TTL bounds it.
 
 ### F5 — HIGH → MEDIUM — **PARTIAL** — Actor egress is unrestricted
 *Elevation of privilege / lateral movement.*
@@ -195,100 +163,8 @@ theft.
 **vault credentials pulled into the hand** — its memory image lands in GCS.
 Anyone with bucket read gets user PATs.
 
-**Fix:** CMEK + tight bucket IAM today; the real fix is F9 (egress injection, so
-the sandbox never holds credentials).
-
-### F7 — MEDIUM — **FIXED** — `/v1/access` is unauthenticated and unthrottled
-*Spoofing / DoS.* No rate limiting (`access.go`). An attacker who guesses or
-learns an allowlisted email gets that user's token — and because the endpoint is
-idempotent, the **same** token the legitimate user already holds. Email is
-therefore a single-factor credential.
-
-**Fixed (the throttle).** `accessLimiter` caps issuance at 10/min per IP and
-5/min per email, so the endpoint can no longer be ground through at speed.
-
-**Unchanged by design:** email remains a single factor, and the endpoint is still
-idempotent, so anyone who learns an allowlisted address gets that user's token.
-An IdP (OIDC) or a one-time link is the real fix; the rate limit buys time, it
-does not change the trust model. Treat the allowlist as a *convenience for a
-closed tester group*, never as authentication.
-
-### F8 — MEDIUM — **FIXED** — Vault secret ids are ambiguously concatenated
-*Tampering.* `secretID = "agentplane-cred-<user>-<name>"` (`vault.secretID()`, as originally built) with no
-delimiter escaping: user `a` + name `b-c` collides with user `a-b` + name `c`.
-Emails contain `.` and `@`, so the id is also not obviously Secret-Manager-safe
-for all inputs.
-
-**Fixed.** `vault.secretID()` hashes the user into a fixed-width prefix —
-`agentplane-cred-<sha256(user)[:8] hex>-<name>` — so the user segment can no
-longer run into the name segment, and an email's `.`/`@` never reach the secret
-id. Collisions between `(a, b-c)` and `(a-b, c)` are structurally impossible.
-
-### F9 — MEDIUM — Egress credential injection: API declared, gateway unbuilt
-*Design gap.* [`egress/`](../../../egress/) passes as a **local Docker proof
-only** — verified: zero egress pods in the cluster. Today's reality is the path
-F3/F6 describe: credentials are copied *into* the sandbox.
-
-**Update (#29 / #30):** the AgentSpec now carries an egress policy — `egress.mode`
-+ `allowedHosts` for reachability, and `credentials[].inject` binding a
-credential to the destinations that receive it. It validates, compiles onto the
-ActorTemplate, and is **inert**: no gateway consumes it, so declaring a policy
-constrains nothing. Two layers are enforced at *create* time (a host must be
-both reachable and trusted with the secret) so a policy can't silently match
-nothing — but that is input validation, not runtime containment.
-
-Remaining chain: serve renders the policy per session → gateway actor
-(`e-<sid>`) → traffic actually forced through it (F11) → `egress_gateway_address`
-wired, which Substrate leaves unproduced.
-
-**Fix:** deploy the gateway. Until then the docs must not imply the sandbox is
-secretless — this file and `docs/agents.md` both carry that correction.
-
-### F11 — HIGH — Proxy enforcement via `HTTPS_PROXY` is bypassable by the code it contains
-*Elevation of privilege / design gap.* The v1 proof routes egress by setting
-`HTTPS_PROXY` in the hand and trusting the proxy's CA. That is a **cooperative**
-control: model-generated code running in that same sandbox can `unset
-HTTPS_PROXY`, pass `--noproxy`, or open a raw socket, and its traffic leaves via
-the worker's normal NAT path — unfiltered, unlogged, and unaffected by any
-allowlist. The proof demonstrates that injection *works*; it does not
-demonstrate that egress is *contained*.
-
-This matters because the threat being mitigated is precisely "the agent does
-something we didn't intend" — an enforcement mechanism the agent can switch off
-does not mitigate it.
-
-**Fix:** enforce below the sandbox, where the actor cannot reach the control.
-Substrate's `atunnel` does exactly this — nftables redirect on the *host*, mTLS
-to a remote gateway, authenticated `X-Ate-Atespace` / `X-Ate-Actor-Name` headers
-— and it is **no longer hypothetical**: it shipped in the Substrate we now run,
-and every worker logs `atunnel serving` at boot.
-
-What it does not do yet is carry our traffic. atunnel is L4 CONNECT only (no TLS
-termination, so no injection), and its `egress_gateway_address` has **no
-producer** in Substrate — nothing sets it, so no traffic is redirected today.
-The remaining work is ours: build the gateway (F9) and supply that address.
-
-Treat `HTTPS_PROXY` as a development convenience only, never as the production
-containment boundary.
-
-### F12 — LOW — Placeholder credentials are a deliberate, smaller exposure
-*Information disclosure (accepted trade-off).* Pure injection assumes the
-sandbox sends an *uncredentialed* request the gateway then authenticates. Many
-real clients won't: `git` will not attempt Basic auth with no credential
-configured, and most CLIs read a key from the environment before making any
-call. Supporting them requires an **opaque placeholder** inside the sandbox
-which the gateway swaps for the real secret at egress (the approach Anthropic's
-Managed Agents uses for `environment_variable` credentials).
-
-The placeholder is a real string the agent can read and exfiltrate — so this is
-weaker than holding nothing, but far stronger than F6 (the placeholder is
-useless anywhere except through the gateway, which decides whether the caller
-and destination are entitled to the real value). Known side effect: clients
-that validate key *format* locally fail before any network call.
-
-**Fix:** support both modes — placeholder where the client demands one, pure
-injection everywhere else — and prefer the latter. Never inject into the URL
-path (Slack-style path-secret webhooks are out of scope by design).
+**Fix:** CMEK + tight bucket IAM today; the real fix is the egress section below
+(F9/F11/F12), so the sandbox never holds credentials.
 
 ### F10 — LOW — **PARTIAL (merged, not enabled)** — `InsecureSkipVerify` to ateapi
 *Spoofing.* `ateapiTLS()` now verifies the control plane against a PEM bundle at
@@ -305,6 +181,53 @@ underneath — but leaving it unset defeats the verification upstream added.
 
 **Fix:** mount the ate CA bundle and set `AGENTPLANE_ATEAPI_CA`; the code path
 already exists and the warning in the logs is the reminder.
+
+### F9 / F11 / F12 — HIGH — Egress is neither contained nor credential-free
+
+*Design gap.* These were three findings for one absent component; they are one
+story and read better as one.
+
+**Today:** the hand holds the credential. Serve grants it, the hand writes it to
+actor memory and `~/.git-credentials`, and it calls GitHub directly through the
+worker's NAT — no allowlist, no per-call audit, no central rotation, any
+destination reachable. It is in every checkpoint of that actor (F6). Verified:
+zero egress pods in the cluster.
+
+**Declared but inert (F9).** The AgentSpec carries `egress.mode` + `allowedHosts`
+for reachability and `credentials[].inject` binding a credential to the
+destinations that may receive it. It validates, compiles onto the ActorTemplate,
+and **nothing consumes it** — declaring a policy constrains nothing today. The
+two-layer rule (a host must be both reachable *and* trusted with the secret) is
+enforced at create time so a policy can't silently match nothing, but that is
+input validation, not runtime containment.
+
+**Why a proxy env var is not the answer (F11).** The local proof routed egress by
+setting `HTTPS_PROXY` in the hand. That is a **cooperative** control: code in
+that sandbox can `unset HTTPS_PROXY`, pass `--noproxy`, or open a raw socket and
+leave via the normal NAT path — unfiltered and unlogged. The threat being
+mitigated is precisely "the agent does something we didn't intend", and a
+mechanism the agent can switch off does not mitigate it.
+
+Substrate's **atunnel** is the right shape — nftables redirect on the *host*,
+below the sandbox, mTLS to a remote gateway, authenticated
+`X-Ate-Atespace` / `X-Ate-Actor-Name` headers — and it now ships in the Substrate
+we run (every worker logs `atunnel serving`). It carries none of our traffic yet:
+it is L4 CONNECT only, and `egress_gateway_address` has **no producer** upstream.
+
+**The placeholder trade-off (F12).** Pure injection assumes the sandbox sends an
+uncredentialed request the gateway then authenticates. Many clients won't — `git`
+will not attempt Basic auth with nothing configured. Supporting them needs an
+opaque placeholder inside the sandbox, swapped at egress. That string is readable
+and exfiltratable, so it is weaker than holding nothing but far stronger than
+today: it is useless anywhere except through the gateway. Known side effect:
+clients that validate key *format* locally fail before any network call.
+
+**Remaining chain:** build the gateway → serve renders the policy per session →
+supply `egress_gateway_address` so atunnel actually redirects → prefer pure
+injection, placeholder only where a client demands one. Never inject into the URL
+path; path-secret webhooks (Slack) are out of scope by design.
+
+**Until then, no document may imply the sandbox is secretless.**
 
 ### Accepted risks (deliberate, documented)
 
@@ -379,6 +302,7 @@ failure there defeats our controls:
 
 1. **F2 (TLS)** and **F1 (session ownership)** — before any external tester. Both are small.
 2. **F5 (NetworkPolicy)** and **F4 (grant TTL)** — cheap, big blast-radius reduction.
-3. **F3 (key separation)** then **F9 (egress injection)** — the structural fixes; F9 subsumes F6.
+3. **F9/F11/F12 (egress)** — the structural fix; it subsumes F6. F3's key
+   separation is done; per-hand admin tokens are what remain of it.
 4. When building F9, enforce via **atunnel, not `HTTPS_PROXY`** (F11) — otherwise the
    containment is one `unset` away from being nothing.
