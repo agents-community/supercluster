@@ -15,6 +15,7 @@ import http from "node:http";
 import { createRuntime } from "./runtime.mjs";
 import { actorIdentity } from "./identity.mjs";
 import { selectHarness } from "./harness/index.mjs";
+import { contextFromRequest, initOtel } from "./otel.mjs";
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.BRAIN_WORKDIR || "/workspace";
@@ -46,6 +47,8 @@ function readBody(req) {
     req.on("error", reject);
   });
 }
+
+initOtel();
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -80,7 +83,9 @@ const server = http.createServer(async (req, res) => {
       if (ev.type !== "user.message") continue; // v0: only user messages
       const text = textFromContent(ev.content ?? ev.text ?? "");
       if (!text) continue;
-      rt.acceptUserMessage(text);
+      // Hand the caller's trace context to the runtime so the turn's span is a
+      // child of serve's request rather than the root of a disconnected trace.
+      rt.acceptUserMessage(text, contextFromRequest(req));
       accepted.push(ev.type);
     }
     res.writeHead(accepted.length ? 202 : 400, { "content-type": "application/json" });

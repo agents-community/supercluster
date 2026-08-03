@@ -14,9 +14,11 @@ RUN apt-get update \
 RUN npm install -g @anthropic-ai/claude-code@latest && npm cache clean --force
 
 WORKDIR /app
-RUN npm install @anthropic-ai/claude-agent-sdk@latest && npm cache clean --force
+# OTEL for the brain. Claude Code is installed globally and resolves its OWN
+# copy of @opentelemetry/api, so the brain needs its own SDK here — see otel.mjs.
+RUN npm install @anthropic-ai/claude-agent-sdk@latest @opentelemetry/api@^1 @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-grpc && npm cache clean --force
 
-COPY server.mjs runtime.mjs identity.mjs /app/
+COPY server.mjs runtime.mjs identity.mjs otel.mjs /app/
 COPY harness /app/harness
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

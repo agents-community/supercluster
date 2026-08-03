@@ -39,7 +39,7 @@ spec:
         # the brain saw its hand MCP "pending" forever, and every session ran
         # tool-less. Rebaking under a new name avoids deleting the old
         # template out from under live sessions.
-        - { name: BRAIN_HAND_TEMPLATE, value: "hand-v2" }
+        - { name: BRAIN_HAND_TEMPLATE, value: "hand-v3" }
         # Hand gateway: the shared token serve uses to inject federated MCP
         # upstreams + credentials into a session's hand (/admin/upstreams).
         # Grant-signing key — MUST differ from HAND_ADMIN_TOKEN (F3): that
