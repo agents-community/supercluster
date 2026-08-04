@@ -144,11 +144,12 @@ func (p *proxy) handle(w http.ResponseWriter, r *http.Request) {
 	// repos need no auth, so forward unauthenticated and let the upstream
 	// decide, rather than turning a public clone into a proxy error.
 	authed := "none"
-	if grant := r.Header.Get(grantHeader); grant != "" {
-		name := r.Header.Get(credHeader)
-		if name == "" {
-			name = "gh-token"
-		}
+	// Only attempt a lookup when the session actually named a credential.
+	// Defaulting to a well-known name meant a PUBLIC repo clone did a doomed
+	// vault lookup and logged `failed:gh-token`, which reads as an auth problem
+	// when nothing is wrong — the agent simply declared no credential.
+	name := r.Header.Get(credHeader)
+	if grant := r.Header.Get(grantHeader); grant != "" && name != "" {
 		if tok, err := p.credential(r.Context(), grant, name); err != nil {
 			authed = "failed:" + name
 			log.Printf("credential %q unavailable (%v) — forwarding unauthenticated to %s", name, err, host)
@@ -158,9 +159,13 @@ func (p *proxy) handle(w http.ResponseWriter, r *http.Request) {
 			out.SetBasicAuth("x-access-token", tok)
 			authed = name
 		}
+	} else if name == "" {
+		// No credential declared: a public repo, which needs none.
+		authed = "public"
 	} else {
-		// No grant means nothing identified the caller. Worth logging: a private
-		// repo will 401 and git will report something unhelpful about usernames.
+		// A credential was named but no grant arrived, so nothing identified the
+		// caller. Worth logging: a private repo will 401 and git will report
+		// something unhelpful about usernames.
 		authed = "no-grant"
 	}
 

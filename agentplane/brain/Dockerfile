@@ -11,12 +11,21 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # The harness CLI (the SDK drives it) — global so `claude` is on PATH too.
-RUN npm install -g @anthropic-ai/claude-code@latest && npm cache clean --force
+# PINNED, deliberately. These versions decide whether a subagent inherits the
+# agent's `deny` list — i.e. whether model-generated code can run in the BRAIN
+# instead of the sandboxed hand. With @latest, two builds of this same file
+# produced different security behaviour: an escrowed transcript from
+# 2026-08-03 shows `Bash` executing under an agent that denied it, on an image
+# built days earlier. Bump these on purpose, and re-run the boundary test in
+# test/smoke-live.sh afterwards.
+ARG CLAUDE_CODE_VERSION=2.1.220
+ARG CLAUDE_AGENT_SDK_VERSION=0.3.220
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && npm cache clean --force
 
 WORKDIR /app
 # OTEL for the brain. Claude Code is installed globally and resolves its OWN
 # copy of @opentelemetry/api, so the brain needs its own SDK here — see otel.mjs.
-RUN npm install @anthropic-ai/claude-agent-sdk@latest @opentelemetry/api@^1 @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-grpc && npm cache clean --force
+RUN npm install "@anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK_VERSION}" @opentelemetry/api@^1 @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-grpc && npm cache clean --force
 
 COPY server.mjs runtime.mjs identity.mjs otel.mjs /app/
 COPY harness /app/harness
