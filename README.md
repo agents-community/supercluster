@@ -43,8 +43,9 @@ are its stars.
 | **[`agentplane/`](agentplane/)** | The control plane + runtime — agents, sessions, the durable-mind engine, credential vault, self-service access, and the HTTP API. | Go control plane · Node brain image · [Agent Substrate](https://github.com/agent-substrate/substrate) |
 | **[`andromeda/`](andromeda/)** | The terminal you actually live in — a rich TUI (markdown, streaming, syntax highlighting) for chatting with durable minds. | Ink, zero-build — `npx @agentsupercluster/andromeda` |
 | **[`hand/`](hand/)** | The agent's hand — an MCP tool gateway in the sandbox: bash/file tools + federation of the user's own MCP servers. The brain talks to one door. | Node · MCP streamable HTTP |
-| **[`egress/`](egress/)** | The AgentGateway — secretless egress: credentials injected at the proxy, never inside the sandbox. | mitmproxy proof → Substrate atunnel |
-| **[`infra/`](infra/)** | Deploy manifests, LB/tunnel, Terraform, and versioned [Substrate patches](infra/substrate-patches/). | k8s · GCP |
+| **[`gitproxy/`](gitproxy/)** | Attaches your git credential **outside** the sandbox, so a repository token never enters an actor — and so a checkpoint cannot capture it. | Go · distroless |
+| **[`egress/`](egress/)** | The general secretless-egress design for arbitrary hosts. Proof only; `gitproxy/` is the shipped subset. | mitmproxy proof → Substrate atunnel |
+| **[`infra/`](infra/)** | Deploy manifests, network policy, and versioned [Substrate patches](infra/substrate-patches/). Every account-specific value lives in one `config.env`; [`BOOTSTRAP.md`](infra/BOOTSTRAP.md) stands the whole thing up in a fresh GCP project. | k8s · GCP |
 
 Galaxies never share code across language boundaries — the contract between
 them is the **HTTP API** ([`agentplane/docs/api.md`](agentplane/docs/api.md)).
@@ -56,16 +57,29 @@ Testing spans three layers — see [`test/`](test/).
 ```bash
 npx @agentsupercluster/andromeda login        # email → personal token, saved
 npx @agentsupercluster/andromeda --agent starter
-#   … chat … Ctrl+S to sleep the mind … Esc to detach …
+#   … chat … /sleep to sleep the mind … /usage for cost … Esc to detach …
 npx @agentsupercluster/andromeda              # tomorrow: pick the session up — it remembers
 ```
 Full walkthrough: [`andromeda/ONBOARDING.md`](andromeda/ONBOARDING.md).
 
-**As an operator** (needs an Agent Substrate cluster — see `agentplane/docs`):
+**As an operator**, deploying into your own GCP project — full runbook in
+[`infra/BOOTSTRAP.md`](infra/BOOTSTRAP.md), which front-loads the cluster
+settings that are not optional and are invisible until they bite:
+
 ```bash
-cd agentplane && go build -o /tmp/agentplane ./cmd/agentplane
-/tmp/agentplane serve                          # the HTTP control plane
-/tmp/agentplane agent create -f examples/starter.yaml   # or codex.yaml / pi.yaml
+cp infra/config.env my-account.env    # project, cluster, bucket, image tags
+source my-account.env
+./infra/build.sh all                  # build every image into your registry
+./infra/render.sh | kubectl apply -f -
+kubectl apply -f infra/serve/networkpolicy.yaml
+```
+
+Then create agents — the spec pins an image digest, which is per-account, so
+`agent.sh` resolves it for you:
+
+```bash
+./infra/agent.sh agentplane/examples/starter.yaml --create   # or codex.yaml / pi.yaml
+./test/smoke-live.sh                  # asserts a hand tool actually ran
 ```
 
 Bring your own key (nothing stored):
@@ -75,19 +89,32 @@ ANDROMEDA_API_KEY=sk-… npx @agentsupercluster/andromeda --agent starter
 
 ## 🧭 Concepts in one breath
 
-- **agent** = an immutable definition (harness + model + tools + system prompt), compiled to a Substrate `ActorTemplate`.
+- **agent** = a **versioned** definition (harness + model + tools + prompt + the repos its sandbox should contain). Each version compiles to its own immutable Substrate `ActorTemplate`; re-posting a name mints the next version and **running sessions keep the one they were minted from**.
 - **session** = a durable mind minted from an agent — a checkpointable gVisor actor.
 - **harness** = the brain vendor (claude-code / codex / **pi**); adding one is a single strategy module.
 - **the API is the boundary** — every client (TUI, web, scripts) speaks the same HTTP dialect; nothing needs cluster access.
 
 ## 🔭 Status & roadmap
 
-Alpha — the runtime, three harnesses, durable workspace, hand tool gateway,
-credential vault + self-service access, streaming TUI, and end-to-end tracing
-are **live-verified**; the secretless egress proof passes
-([`egress/`](egress/)). See [`agentplane/docs/`](agentplane/docs/) and the
-reliability runbook. Next: the egress gateway deployed in-path on Substrate
-(atunnel), then per-user credential selection via ActorIdentity.
+Alpha, and everything below is **live-verified** rather than designed:
+
+- the runtime, three harnesses, durable workspace, hand tool gateway, streaming TUI, end-to-end tracing
+- **agent versioning** — updating an agent no longer destroys its sessions
+- **declarative repositories** — an agent's repos are checked out before its first message
+- **git credentials outside the sandbox** ([`gitproxy/`](gitproxy/)) — a repo token never enters an actor, so a checkpoint cannot capture it
+- **per-user MCP auth** — credentials are vault references, never literals in a spec
+- **actor egress constrained** — the GCP metadata server and private ranges are unreachable from a sandbox
+- **session metadata in Firestore** — usage and activity readable while a mind sleeps, and cost survives deletion
+
+Known gaps are tracked honestly in the
+[threat model](agentplane/docs/threat-model/README.md), which is written against
+the **cluster** rather than against `main` — the two differ, and the difference
+is the point. The largest open items: the public endpoint is still plain HTTP,
+and subagent tool policy is not enforced by the harness
+([upstream #172](https://github.com/anthropics/claude-agent-sdk-typescript/issues/172)).
+
+Next: HTTPS, then extending the gitproxy pattern to non-git credentials, then
+per-user credential selection via Substrate `ActorIdentity`.
 
 ## 🤝 Contributing
 

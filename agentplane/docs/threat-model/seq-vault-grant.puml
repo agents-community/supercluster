@@ -29,10 +29,21 @@ serve --> hand : 200 payload
 hand -> hand : write ~/.git-credentials (0600)\n<color:#CC0000>now inside the sandbox & its snapshots (F6)</color>
 
 == 4. use ==
-hand -> ext : git push (credential from disk)
+hand -> ext : env / header credential, from actor memory
 note over hand, ext #FFE4E4
-  <b>Target state (F9, egress/):</b> steps 3-4 disappear —
-  the hand calls uncredentialed and the egress proxy injects.
-  <b>Not deployed:</b> zero egress pods in the cluster today.
+  This path remains for <b>env</b> and <b>header</b> credentials, and the value
+  is in actor memory — so it is in the snapshot (<b>F6</b>: checkpoints capture
+  memory pages, not only disk).
+end note
+
+== GIT no longer uses any of the above ==
+hand -> hand : url."http://git-proxy/gh/".insteadOf https://github.com/
+hand -> ext : plain HTTP to git-proxy, carrying only the <b>grant</b>
+note over hand, ext #E4FFE4
+  <b>Deployed (2026-08-04).</b> git-proxy exchanges the grant for the user's
+  token OUTSIDE the sandbox and re-originates over HTTPS. The token never
+  enters the actor, so no checkpoint can capture it. No TLS is terminated and
+  no CA is provisioned into the sandbox — which is what stalled the general
+  gateway. Extending this to env/header credentials is the remaining F6 work.
 end note
 @enduml
