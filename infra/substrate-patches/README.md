@@ -5,6 +5,27 @@ and carries a few **local changes on top of upstream `main`**. This directory is
 the source of truth for those changes so they are versioned, reviewable, and
 never silently lost on a sync.
 
+## One command
+
+```bash
+./infra/substrate-patches/sync.sh            # take upstream main, re-apply our deltas
+./infra/substrate-patches/sync.sh 860250b    # or a specific commit
+./infra/substrate-patches/sync.sh --check    # verify the patches still apply, change nothing
+```
+
+`sync.sh` refuses to run over uncommitted work in the Substrate checkout (it
+checks out a different commit, and silently discarding edits would be worse than
+stopping), and on conflict it prints how to regenerate the patch rather than
+leaving a half-applied tree.
+
+**Why patches rather than a fork.** The delta is ~46 lines across two files. A
+fork is a branch someone has to remember to push and rebase; patches live beside
+the code that depends on them and are reviewed in the same PR. Verified: applying
+these to a clean checkout of `BASE_COMMIT` reproduces the deployed tree exactly.
+
+**Why it verifies instead of assuming.** Losing `0001` does not fail loudly —
+SSE streams just start dying at 10s again and it reads as a new bug.
+
 ## How Substrate is wired in
 
 - Our Go code imports only Substrate's control-plane protobufs:
