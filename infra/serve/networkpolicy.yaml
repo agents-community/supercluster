@@ -1,50 +1,34 @@
 # Default-deny for the actor pools (threat-model F5).
 #
-# !! NOT APPLIED — TWO failed canaries now (2026-08-01 and 2026-08-04).
+# Default-deny + allowlist for the actor pools (threat-model F5).
 #
-# 2026-08-04, second attempt, WITH the label and NodeLocal-DNS fixes below and
-# with explicit serve/gitproxy egress added: applying it stalled every turn.
-# A session that worked seconds earlier stopped progressing (tool calls frozen),
-# and a NEW session produced no reply and no tools at all. Rolled back within
-# ~3 minutes; a fresh session then worked immediately, so the policy was the
-# cause and the rollback is clean.
+# APPLIED and verified 2026-08-04, after two earlier failures. Actor egress is
+# now constrained: the GCP metadata server and the private ranges are
+# unreachable from a sandbox, which was the one exploitable gap left open.
 #
-# What was NOT established: WHY. No DNS errors appeared in the brain logs, and
-# `cat /etc/resolv.conf` in a worker returned nothing, so the resolver the
-# actors actually use is still unknown. One candidate: kube-dns is reached at
-# its SERVICE ip (34.118.224.10) and under Dataplane V2 the podSelector rule
-# may be evaluated against that ip rather than the backing pod. That is a
-# hypothesis, not a finding.
+# Getting here needed two fixes that the first two attempts had no way to find:
 #
-# DO NOT apply again from a hypothesis. The next attempt needs a way to observe
-# the drop — a Cilium policy trace, or a scratch WorkerPool selected by its own
-# label so a failure cannot take real sessions with it.
+#   1. NodeLocal DNSCache was intercepting the kube-dns SERVICE ip (34.118.224.10)
+#      on the HOST, so DNS never reached a kube-dns pod. Neither `podSelector:
+#      k8s-app=kube-dns` nor an ipBlock can match host-destined traffic under
+#      Cilium, and standard NetworkPolicy cannot express "allow the host" — the
+#      CiliumNetworkPolicy escape hatch is not available on GKE Dataplane V2.
+#      Disabling the addon (--update-addons=NodeLocalDNS=DISABLED) makes DNS
+#      DNAT to real kube-dns pods, which podSelector does match.
+#      DO NOT RE-ENABLE IT: doing so breaks every NetworkPolicy here.
 #
-# Original note follows. See #25. A first attempt on 2026-08-01 broke DNS
-# for every actor (brain: "API Error: Unable to connect to API (ENOTIMP)") and
-# was rolled back within minutes. Two reasons, both now fixed below but NOT yet
-# re-validated on a canary:
-#   1. the pod label was wrong: pool pods carry `ate.dev/worker-pool`, not the
-#      `workload:` key from hand.yaml.tmpl (that one is WorkerPool metadata, so
-#      the policy silently selected ZERO pods on dry-run and everything on apply);
-#   2. this cluster runs GKE Dataplane V2 (Cilium, `anetd`) with NodeLocal
-#      DNSCache: pods resolve via the node-link-local 169.254.20.10, which
-#      Cilium classifies as HOST entity and `ipBlock: 0.0.0.0/0` does NOT match.
-#      Standard NetworkPolicy cannot express "allow host" — hence the explicit
-#      link-local rule below, and the CiliumNetworkPolicy alternative in #25.
+#   2. OTLP trace export to :4317 was denied — 527 packets in two minutes — and
+#      the brain went STATUS_CRASHED rather than degrading. Found with
+#      `cilium monitor --type drop` in the anetd pod, which is the tool to reach
+#      for first next time; two prior attempts guessed instead and cost an
+#      outage each.
 #
-# APPLY ONLY with a live canary: mint a throwaway session, send one turn, and
-# confirm the reply lands BEFORE walking away. Roll back with
-#   kubectl -n agentplane delete networkpolicy actors-default-deny actors-allow Model-generated code runs
-# in these sandboxes; without a policy it can reach serve, the atenet router,
-# and other sessions' actors — which is what turns a leaked hand admin token
-# (F3) into cross-session compromise.
+# To debug a future breakage:
+#   kubectl -n kube-system exec <anetd-pod> -- cilium monitor --type drop
 #
-# Actors legitimately need: DNS, the atenet router (ingress from it, and egress
-# to it for the hand's federated MCP upstreams), and the internet (vendor LLM
-# APIs for the brain; git/package registries for the hand). They do NOT need
-# serve, the k8s API, or each other.
----
+# Roll back with:
+#   kubectl -n agentplane delete networkpolicy actors-default-deny actors-allow
+#
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -116,6 +100,19 @@ spec:
         matchLabels: { app: agentplane-gitproxy }
     ports:
     - { protocol: TCP, port: 8080 }
+  # OTLP trace export. Found by `cilium monitor --type drop`: without this the
+  # policy denied 527 packets to :4317 in two minutes, and the brain actor went
+  # STATUS_CRASHED rather than degrading — a blocked exporter is not a
+  # best-effort failure for the harness. Both collectors are needed: ours in
+  # otel-system, and GKE's managed one.
+  - to:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: otel-system }
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: gke-managed-otel }
+    ports:
+    - { protocol: TCP, port: 4317 }
+    - { protocol: TCP, port: 4318 }
   - to:                                   # the internet: vendor APIs, git, registries
     - ipBlock:
         cidr: 0.0.0.0/0
