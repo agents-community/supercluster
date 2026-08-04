@@ -1,3 +1,6 @@
+# NOTE: the image is digest-pinned and BOTH parts are per-account — replace
+# PROJECT_ID and the digest after building into your own project.
+# See infra/BOOTSTRAP.md step 8.
 # A pi-harness agent — ONE harness, ANY model provider. The model's
 # "provider/" prefix decides which API key the compiler wires in
 # (anthropic → ANTHROPIC_API_KEY, openai → OPENAI_API_KEY,
@@ -6,7 +9,7 @@
 
 name: pi
 harness: pi
-image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-pi@sha256:5f8a7a41108aef88968608d11bd8b12f80a004dba69fd02f4ec5ae24b4fbb2f5
+image: gcr.io/PROJECT_ID/ate-images/agentplane-brain-pi@sha256:5f8a7a41108aef88968608d11bd8b12f80a004dba69fd02f4ec5ae24b4fbb2f5
 
 model: anthropic/claude-haiku-4-5   # or openai/gpt-5, google/gemini-2.5-pro, …
 systemPrompt: >-

@@ -21,7 +21,7 @@ spec:
       serviceAccountName: agentplane-serve
       containers:
       - name: gitproxy
-        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-gitproxy:g4
+        image: ${IMAGE_REPO}/agentplane-gitproxy:${GITPROXY_TAG}
         env:
         - { name: AGENTPLANE_SERVE_BASE, value: "http://agentplane-serve.agentplane.svc:7433" }
         - { name: GITPROXY_ADDR, value: ":8080" }

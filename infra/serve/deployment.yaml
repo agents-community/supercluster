@@ -21,7 +21,7 @@ spec:
         # NOT a placeholder — applying this file must never break the running
         # deployment. `PROJECT_ID`/`:latest` here produced InvalidImageName on
         # a plain `kubectl apply`. Bump the tag here when you deploy.
-        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v29
+        image: ${IMAGE_REPO}/agentplane-serve:${SERVE_TAG}
         ports: [{ containerPort: 7433, name: http }]
         env:
         # Per-user tokens: serve reads this JSON file ({"user":"token"}) from a
@@ -40,7 +40,7 @@ spec:
         # the brain saw its hand MCP "pending" forever, and every session ran
         # tool-less. Rebaking under a new name avoids deleting the old
         # template out from under live sessions.
-        - { name: BRAIN_HAND_TEMPLATE, value: "hand-v5" }
+        - { name: BRAIN_HAND_TEMPLATE, value: "${HAND_TEMPLATE}" }
         # Hand gateway: the shared token serve uses to inject federated MCP
         # upstreams + credentials into a session's hand (/admin/upstreams).
         # Grant-signing key — MUST differ from HAND_ADMIN_TOKEN (F3): that
@@ -66,13 +66,13 @@ spec:
         # Deployment but missing here: apply preserved it only because 3-way
         # merge treats unmanaged keys as external, so the repo could not have
         # rebuilt this cluster — both would have silently degraded.
-        - { name: AGENTPLANE_PROJECT, value: "project-28d42275-7fed-43e6-a9a" }
-        - { name: AGENTPLANE_BUCKET, value: "snapshot-substrate-test-project-28d42275-7fed-43e6-a9a" }
+        - { name: AGENTPLANE_PROJECT, value: "${PROJECT_ID}" }
+        - { name: AGENTPLANE_BUCKET, value: "${SNAPSHOT_BUCKET}" }
         # Tracing (optional):
-        - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
+        - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "${OTEL_ENDPOINT}" }
         # Inject Claude Code LLM telemetry into every baked agent (llm_request
         # spans + token/cost metrics → the same collector). See docs/observability.md.
-        - { name: AGENTPLANE_OTEL_ENDPOINT, value: "http://opentelemetry-collector.otel-system.svc:4317" }
+        - { name: AGENTPLANE_OTEL_ENDPOINT, value: "${OTEL_ENDPOINT}" }
         readinessProbe:
           httpGet: { path: /healthz, port: 7433 }
           initialDelaySeconds: 3
