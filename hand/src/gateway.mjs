@@ -143,6 +143,14 @@ export function setGitCredentials(creds) {
 // token never arrives.
 export function configureGitProxy({ proxyBase, grant, credential }) {
   if (!proxyBase) return false;
+  // Never prompt. Without this, a 401 makes git block asking for a username
+  // that no one can type, and the clone fails with a message about terminals
+  // instead of about auth — which is what happened on the first live run.
+  process.env.GIT_TERMINAL_PROMPT = "0";
+  // The proxy authenticates on our behalf, so git must not go looking for
+  // credentials for the proxy host itself: `credential.helper store` (set by
+  // the legacy pull path) would otherwise try, find none, and prompt.
+  spawnSync("git", ["config", "--global", `credential.${proxyBase.replace(/\/$/, "")}.helper`, ""]);
   // insteadOf rewrites https://github.com/... to the proxy, so the URL the
   // model sees and types stays the normal public one.
   spawnSync("git", ["config", "--global", `url.${proxyBase.replace(/\/$/, "")}/gh/.insteadOf`,
@@ -158,7 +166,15 @@ export function configureGitProxy({ proxyBase, grant, credential }) {
     spawnSync("git", ["config", "--global", "--add", "http.extraHeader",
       `X-Agentplane-Credential: ${credential}`]);
   }
-  return true;
+  // Verify rather than assume: spawnSync failures are silent, and a config that
+  // did not apply looks identical to one that did until a clone fails oddly.
+  const check = spawnSync("git", ["config", "--global", "--get-regexp", "^url\\."],
+    { encoding: "utf8" });
+  const applied = (check.stdout || "").includes(proxyBase.replace(/\/$/, ""));
+  if (!applied) {
+    console.error("git proxy config did NOT apply:", (check.stderr || check.stdout || "").slice(0, 200));
+  }
+  return applied;
 }
 
 // Clone the agent's declared repositories into the sandbox. Idempotent: an
@@ -184,7 +200,10 @@ export function cloneRepositories(repos) {
     else if (r.checkout?.tag) args.push("--branch", r.checkout.tag);
     args.push(r.url, dest);
 
-    const res = spawnSync("git", args, { encoding: "utf8", timeout: 10 * 60 * 1000 });
+    const res = spawnSync("git", args, {
+      encoding: "utf8", timeout: 10 * 60 * 1000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
     if (res.status !== 0) {
       // stderr can contain a URL; it never contains the token, which lives only
       // in the proxy. Truncated so a huge git error cannot flood the log.

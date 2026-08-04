@@ -61,7 +61,7 @@ type proxy struct {
 func main() {
 	p := &proxy{
 		serveBase: env("AGENTPLANE_SERVE_BASE", "http://agentplane-serve.agentplane.svc:7433"),
-		upstream:  map[string]string{"gh": "github.com"},
+		upstream:  parseUpstreams(env("GITPROXY_UPSTREAMS", "gh=github.com,ghapi=api.github.com")),
 		client: &http.Client{
 			Timeout: 5 * time.Minute, // clones are slow; this is not a chat request
 			Transport: &http.Transport{
@@ -88,6 +88,22 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// parseUpstreams reads "prefix=host,prefix=host". Configurable so a GitHub
+// Enterprise or self-hosted host can be added without a rebuild — but still a
+// closed set, because forwarding anywhere would make this an open relay that
+// attaches credentials to arbitrary destinations.
+func parseUpstreams(spec string) map[string]string {
+	out := map[string]string{}
+	for _, pair := range strings.Split(spec, ",") {
+		prefix, host, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if !ok || prefix == "" || host == "" {
+			continue
+		}
+		out[prefix] = host
+	}
+	return out
 }
 
 func env(k, def string) string {
@@ -127,23 +143,36 @@ func (p *proxy) handle(w http.ResponseWriter, r *http.Request) {
 	// Resolve the credential for THIS session. A failure is not fatal: public
 	// repos need no auth, so forward unauthenticated and let the upstream
 	// decide, rather than turning a public clone into a proxy error.
+	authed := "none"
 	if grant := r.Header.Get(grantHeader); grant != "" {
 		name := r.Header.Get(credHeader)
 		if name == "" {
 			name = "gh-token"
 		}
 		if tok, err := p.credential(r.Context(), grant, name); err != nil {
+			authed = "failed:" + name
 			log.Printf("credential %q unavailable (%v) — forwarding unauthenticated to %s", name, err, host)
 		} else {
 			// Git over HTTPS uses Basic auth; the username is ignored by GitHub
 			// when the password is a token.
 			out.SetBasicAuth("x-access-token", tok)
+			authed = name
 		}
+	} else {
+		// No grant means nothing identified the caller. Worth logging: a private
+		// repo will 401 and git will report something unhelpful about usernames.
+		authed = "no-grant"
 	}
 
 	resp, err := p.client.Do(out)
+	// One line per request: without it, "did my credential get attached?" is
+	// unanswerable, which is exactly where the first live test got stuck.
+	// Never logs the value — only which credential was used.
+	if err == nil {
+		log.Printf("%s https://%s%s → %d (credential=%s)", r.Method, host, target.Path, resp.StatusCode, authed)
+	}
 	if err != nil {
-		log.Printf("upstream %s: %v", host, err)
+		log.Printf("upstream %s: %v (credential=%s)", host, err, authed)
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
 	}

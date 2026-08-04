@@ -134,3 +134,15 @@ func TestHealthz(t *testing.T) {
 		t.Errorf("healthz %d", rec.Code)
 	}
 }
+
+func TestParseUpstreams(t *testing.T) {
+	got := parseUpstreams("gh=github.com, ghapi=api.github.com ,bad,=x,y=")
+	if got["gh"] != "github.com" || got["ghapi"] != "api.github.com" {
+		t.Errorf("valid pairs lost: %v", got)
+	}
+	// Malformed entries must be dropped, not turned into an empty-prefix or
+	// empty-host route that could forward somewhere unintended.
+	if len(got) != 2 {
+		t.Errorf("malformed entries kept: %v", got)
+	}
+}
