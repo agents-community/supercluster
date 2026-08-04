@@ -53,6 +53,74 @@ entire control. Only allow-listed tools are auto-approved; headless, anything
 else is denied at the permission layer, so an empty `allow` means a chat-only
 agent. The safety boundary is the gVisor sandbox, not tool lists.
 
+### How the spec reaches the harness
+
+The AgentSpec is vendor-neutral; each in-image adapter translates it. For
+`claude-code` the mapping is direct
+(`agentplane/brain/harness/claude-code.mjs`):
+
+| Spec | Agent SDK option | Effect |
+|---|---|---|
+| `systemPrompt` | `systemPrompt` | as written |
+| `model` | `model` | as written |
+| `allow: [X]` | `allowedTools` | X runs without asking |
+| `deny: [X]` | `disallowedTools` | X is removed |
+| `mcp:` | `mcpServers` | federated **through the hand** when there is one (the normal case) — see below |
+| — | `permissionMode: "dontAsk"` | always set |
+
+`allowedTools` is, in the SDK's own words, a list of tools "auto-allowed
+**without prompting**" rather than a restriction — it directs you to the `tools`
+option to restrict. It nevertheless behaves as an allow-list here, because
+`permissionMode: "dontAsk"` in a headless session means an unlisted tool has
+nobody to approve it and is denied rather than queued. Worth knowing if you ever
+change the permission mode: `allow` would stop being a boundary the moment
+something could answer a prompt.
+
+> **Subagent caveat.** `deny` is not reliably inherited by subagents — an
+> escrowed transcript shows `Bash` running under an agent that denied it
+> ([threat model F13](threat-model/README.md), upstream
+> [#172](https://github.com/anthropics/claude-agent-sdk-typescript/issues/172)).
+> Harness versions are pinned and `test/smoke-live.sh` asserts the boundary, but
+> do not treat per-subagent tool policy as enforced. gVisor is the boundary that
+> does not depend on it.
+
+### Where your `mcp:` servers actually connect
+
+They always work — but with `hand: true` (the normal case) they are **not**
+connected to the reasoning layer. The brain connects to exactly one MCP server,
+the hand, and your servers are federated *through* it:
+
+```
+you declare        mcp: {github: {url, headersFrom: {...}}}
+serve, at setup    resolves the credential for THIS user, POSTs the upstream
+                   to the hand's /admin/upstreams
+the hand           connects to github and re-exposes its tools next to its own
+the brain          sees ONE server — the hand
+```
+
+That is the point of the split: **the brain never holds an upstream URL or a
+credential.** Only the hand does, and only for the session it belongs to.
+
+The visible consequence is naming. A `create_issue` tool on a `github` upstream
+reaches the model as:
+
+```
+mcp__hand__github__create_issue      ← what you get
+mcp__github__create_issue            ← what you might expect
+```
+
+So two things follow:
+
+- **`allow: [mcp__github__*]` matches nothing.** The hand's own entry
+  (`mcp__hand__*`) is added to `allowedTools` automatically, which covers every
+  federated tool too.
+- **You cannot allow-list federated tools individually today.** Restrict by
+  *which servers you connect*, not by which of their tools you permit.
+
+Without a hand (`hand: false`), your servers connect straight to the brain and
+the names are `mcp__github__*` — but then the reasoning layer holds the
+credentials, which is what the split exists to avoid.
+
 ## Split agents: brain + hand
 
 ```yaml
