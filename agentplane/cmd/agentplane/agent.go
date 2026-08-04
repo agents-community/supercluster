@@ -20,6 +20,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -554,6 +555,117 @@ func templateCredentials(ctx context.Context, sc sessionCtx, agent string) ([]st
 		return nil, err
 	}
 	return rt.Credentials, nil
+}
+
+// templateCredentialNames is templateCredentials with errors swallowed — the
+// caller wants a grant scoped to whatever the agent declares, and an agent that
+// declares none still needs a grant for public-repo traffic to carry a session
+// identity the proxy can log.
+func templateCredentialNames(ctx context.Context, sc sessionCtx, agent string) []string {
+	names, err := templateCredentials(ctx, sc, agent)
+	if err != nil {
+		return nil
+	}
+	return names
+}
+
+// postHandAdmin POSTs to one of the paired hand's admin routes, retrying while
+// the actor is still waking. Shared by the upstream and repository pushes so
+// both get the same wake tolerance.
+func postHandAdmin(ctx context.Context, sc sessionCtx, sid, path string, body []byte) (string, error) {
+	hand := naming.HandActor(sid)
+	endpoint := fmt.Sprintf("http://%s%s", sc.atenet, path)
+	adminTok := env("HAND_ADMIN_TOKEN", "")
+	var lastErr error
+	for attempt := 1; attempt <= 4; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		req.Host = naming.ActorDNS(hand, sc.atespace)
+		req.Header.Set("Content-Type", "application/json")
+		if adminTok != "" {
+			req.Header.Set("Authorization", "Bearer "+adminTok)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			out, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+			resp.Body.Close()
+			if resp.StatusCode < 400 {
+				return strings.TrimSpace(string(out)), nil
+			}
+			if resp.StatusCode < 500 {
+				return "", fmt.Errorf("hand rejected %s: HTTP %d", path, resp.StatusCode)
+			}
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt < 4 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+	}
+	return "", fmt.Errorf("hand %s unreachable after retries: %w", path, lastErr)
+}
+
+// templateRepositories reads the agent's declared repositories off the template.
+func templateRepositories(ctx context.Context, sc sessionCtx, agent string) ([]agentspec.Repository, error) {
+	out, err := runKubectl(ctx, "get", "actortemplate", "-n", sc.templateNS,
+		"-o", `jsonpath={.spec.containers[0].env[?(@.name=="AGENTPLANE_SPEC")].value}`, "--", agent)
+	if err != nil {
+		return nil, err
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return nil, nil
+	}
+	var rt struct {
+		Repositories []agentspec.Repository `json:"repositories"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rt); err != nil {
+		return nil, fmt.Errorf("parse repositories: %w", err)
+	}
+	return rt.Repositories, nil
+}
+
+// injectHandRepositories points the hand's git at the proxy and clones the
+// agent's declared repositories, BEFORE the first message so the workspace is
+// ready when the model starts.
+//
+// The grant travels to the hand, not the credential: the proxy exchanges it for
+// the real token outside the sandbox, so the token never enters actor memory
+// and cannot be captured by a checkpoint (#49).
+func injectHandRepositories(ctx context.Context, sc sessionCtx, sid, agent, grant string) error {
+	repos, err := templateRepositories(ctx, sc, agent)
+	if err != nil || len(repos) == 0 {
+		return err
+	}
+	proxyBase := env("AGENTPLANE_GIT_PROXY", "http://git-proxy.agentplane.svc")
+	// One credential name for the session's git traffic. Repositories may name
+	// different credentials, but git's extraHeader is global to the process, so
+	// the first declared one wins; a second distinct name is a config we cannot
+	// honor and should not silently ignore.
+	cred := ""
+	for _, r := range repos {
+		if r.Credential == "" {
+			continue
+		}
+		if cred != "" && cred != r.Credential {
+			log.Printf("warn: session %s declares repositories with different credentials (%q, %q); "+
+				"git sends one header per process, so %q is used for all", sid, cred, r.Credential, cred)
+			continue
+		}
+		cred = r.Credential
+	}
+	body, _ := json.Marshal(map[string]any{
+		"proxyBase": proxyBase, "grant": grant, "credential": cred, "repositories": repos,
+	})
+	resp, err := postHandAdmin(ctx, sc, sid, "/admin/repositories", body)
+	if err != nil {
+		return err
+	}
+	log.Printf("session %s: repositories pushed to the hand (%d declared) — %s", sid, len(repos), resp)
+	return nil
 }
 
 // injectHandUpstreams pushes the agent's mcp servers to the paired hand's

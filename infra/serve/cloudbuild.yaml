@@ -1,4 +1,4 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: [build, -t, gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v28, .]
-images: [gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v28]
+  args: [build, -t, gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v29, .]
+images: [gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v29]

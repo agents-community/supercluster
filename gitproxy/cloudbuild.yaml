@@ -1,0 +1,4 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', 'gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-gitproxy:g4', '.']
+images: ['gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-gitproxy:g4']

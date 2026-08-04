@@ -9,7 +9,9 @@ package agentspec
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 
@@ -39,6 +41,12 @@ type AgentSpec struct {
 	// Substrate DurableDir volume: filesystem state (repos, artifacts)
 	// persists across resumes as FS data, outside the memory image.
 	Workspace *Workspace `yaml:"workspace,omitempty"`
+	// Environment describes what the sandbox IS — repositories on disk, what it
+	// may reach — as opposed to what the agent DOES (prompt, model, tools). Kept
+	// inside the AgentSpec rather than as a second API object: agent versioning
+	// already gives safe iteration, and a separate object doubles the surface
+	// for a benefit that only appears when one agent spans many repos (#49).
+	Environment *Environment `yaml:"environment,omitempty"`
 	// Hand: run a paired HAND actor (h-<id>) for this agent. The brain then
 	// executes via the hand over MCP; deny local exec/fs tools so the model
 	// routes them to the hand (no command runs in the brain).
@@ -130,6 +138,43 @@ func (s *AgentSpec) credentialNames() []string {
 
 type Workspace struct {
 	Durable bool `yaml:"durable"`
+}
+
+// Environment is the sandbox's shape: what is mounted, and what is reachable.
+type Environment struct {
+	Repositories []Repository `yaml:"repositories,omitempty"`
+	// Networking supersedes the top-level `egress:` block. Both are accepted;
+	// specifying both is rejected rather than silently picking one.
+	Networking *Egress `yaml:"networking,omitempty"`
+}
+
+// Repository is a git checkout placed in the sandbox at session setup.
+//
+// The credential is a VAULT REFERENCE, never a literal: the token is resolved
+// outside the sandbox and attached by the git proxy, so it never lands in actor
+// memory and cannot be captured by a checkpoint (snapshots include memory
+// pages, not just disk).
+type Repository struct {
+	URL        string    `yaml:"url" json:"url"`
+	Credential string    `yaml:"credential,omitempty" json:"credential,omitempty"`
+	MountPath  string    `yaml:"mountPath,omitempty" json:"mountPath,omitempty"`
+	Checkout   *Checkout `yaml:"checkout,omitempty" json:"checkout,omitempty"`
+}
+
+// Checkout selects what to check out. Branch and tag are mutually exclusive.
+type Checkout struct {
+	Branch string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Tag    string `yaml:"tag,omitempty" json:"tag,omitempty"`
+	Commit string `yaml:"commit,omitempty" json:"commit,omitempty"`
+}
+
+// defaultMountPath derives /workspace/<repo> from the URL when unset.
+func (r Repository) defaultMountPath() string {
+	base := strings.TrimSuffix(path.Base(strings.TrimSuffix(r.URL, "/")), ".git")
+	if base == "" || base == "." || base == "/" {
+		return ""
+	}
+	return "/workspace/" + base
 }
 
 type MCPSrv struct {
@@ -255,6 +300,9 @@ func (s *AgentSpec) Validate() error {
 	if err := s.validateMCP(); err != nil {
 		return err
 	}
+	if err := s.validateEnvironment(); err != nil {
+		return err
+	}
 	return s.validateEgress()
 }
 
@@ -273,6 +321,97 @@ func validHost(h string) error {
 		return fmt.Errorf("host %q must not include a port", h)
 	case !hostRe.MatchString(h):
 		return fmt.Errorf("host %q is not a valid hostname (lowercase, dot-separated labels)", h)
+	}
+	return nil
+}
+
+// effectiveEgress resolves the networking policy from either location, so the
+// rest of the code has one place to read it.
+func (s *AgentSpec) effectiveEgress() *Egress {
+	if s.Environment != nil && s.Environment.Networking != nil {
+		return s.Environment.Networking
+	}
+	return s.Egress
+}
+
+// repositories returns the declared repos with mountPath defaulted, so the
+// runtime never has to re-derive it and disagree with validation.
+func (s *AgentSpec) repositories() []Repository {
+	if s.Environment == nil {
+		return nil
+	}
+	out := make([]Repository, 0, len(s.Environment.Repositories))
+	for _, r := range s.Environment.Repositories {
+		if r.MountPath == "" {
+			r.MountPath = r.defaultMountPath()
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// validateEnvironment checks the sandbox description (#49).
+func (s *AgentSpec) validateEnvironment() error {
+	env := s.Environment
+	if env == nil {
+		return nil
+	}
+	if env.Networking != nil && s.Egress != nil {
+		return fmt.Errorf("environment.networking and the top-level egress are the same " +
+			"setting — specify one (prefer environment.networking)")
+	}
+	seen := map[string]bool{}
+	for i, r := range env.Repositories {
+		where := fmt.Sprintf("environment.repositories[%d]", i)
+		if r.URL == "" {
+			return fmt.Errorf("%s: url is required", where)
+		}
+		u, err := url.Parse(r.URL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("%s: %q is not a valid repository URL", where, r.URL)
+		}
+		// https only. An ssh:// or git:// URL cannot be routed through the git
+		// proxy, so the token would have to enter the sandbox to be usable —
+		// exactly what this design exists to prevent.
+		if u.Scheme != "https" {
+			return fmt.Errorf("%s: scheme %q is not supported — use https so the proxy can "+
+				"attach the credential outside the sandbox", where, u.Scheme)
+		}
+		if u.User != nil {
+			return fmt.Errorf("%s: the URL carries credentials — put the token in the vault "+
+				"and reference it with `credential:`", where)
+		}
+		mount := r.MountPath
+		if mount == "" {
+			mount = r.defaultMountPath()
+			if mount == "" {
+				return fmt.Errorf("%s: cannot derive a mountPath from %q — set one", where, r.URL)
+			}
+		}
+		if !strings.HasPrefix(mount, "/workspace/") {
+			return fmt.Errorf("%s: mountPath %q must be under /workspace/ — only that path is "+
+				"durable across suspend/resume, and writing elsewhere would be lost", where, mount)
+		}
+		// A checkout escaping its mount would let one repo overwrite another, or
+		// land on the harness's own files.
+		if cleaned := path.Clean(mount); cleaned != mount || strings.Contains(mount, "..") {
+			return fmt.Errorf("%s: mountPath %q must be a clean absolute path", where, mount)
+		}
+		if seen[mount] {
+			return fmt.Errorf("%s: two repositories both mount at %q", where, mount)
+		}
+		seen[mount] = true
+		if c := r.Checkout; c != nil {
+			n := 0
+			for _, v := range []string{c.Branch, c.Tag, c.Commit} {
+				if v != "" {
+					n++
+				}
+			}
+			if n > 1 {
+				return fmt.Errorf("%s: checkout takes exactly one of branch, tag or commit", where)
+			}
+		}
 	}
 	return nil
 }
@@ -312,7 +451,7 @@ func (s *AgentSpec) validateMCP() error {
 func (s *AgentSpec) validateEgress() error {
 	limited := false
 	allowed := map[string]bool{}
-	if e := s.Egress; e != nil {
+	if e := s.effectiveEgress(); e != nil {
 		switch e.Mode {
 		case "", "unrestricted":
 			if len(e.AllowedHosts) > 0 {
@@ -402,6 +541,11 @@ func (s *AgentSpec) runtimeSpec() string {
 	if len(s.Credentials) > 0 {
 		// Names only — serve reads this shape to mint the hand's grant.
 		rt["credentials"] = s.credentialNames()
+	}
+	if repos := s.repositories(); len(repos) > 0 {
+		// Credential is a NAME here, never a value — the git proxy resolves it
+		// per user, outside the sandbox (#49).
+		rt["repositories"] = repos
 	}
 	if eg := s.egressPolicy(); eg != nil {
 		rt["egress"] = eg
@@ -537,11 +681,11 @@ func (s *AgentSpec) egressPolicy() map[string]any {
 		})
 	}
 	mode, hosts := "unrestricted", []string(nil)
-	if s.Egress != nil {
-		if s.Egress.Mode != "" {
-			mode = s.Egress.Mode
+	if s.effectiveEgress() != nil {
+		if s.effectiveEgress().Mode != "" {
+			mode = s.effectiveEgress().Mode
 		}
-		hosts = s.Egress.AllowedHosts
+		hosts = s.effectiveEgress().AllowedHosts
 	}
 	if mode == "unrestricted" && len(injections) == 0 {
 		return nil // nothing to say

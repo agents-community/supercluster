@@ -759,6 +759,14 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if err := s.grantHandCredentials(r.Context(), sid, userOf(r), template); err != nil {
 		s.log.Warn("hand credential grant failed", "session", sid, "err", err)
 	}
+	// Point the hand's git at the proxy and clone declared repositories, before
+	// the first message so the workspace is ready when the model starts. The
+	// grant travels, not the credential — the proxy exchanges it outside the
+	// sandbox (#49). Best-effort: a failed clone should not deny the session.
+	repoGrant := s.mintGrant(sid, userOf(r), templateCredentialNames(r.Context(), s.sc, template), grantTTL)
+	if err := injectHandRepositories(r.Context(), s.sc, sid, template, repoGrant); err != nil {
+		s.log.Warn("repository setup failed", "session", sid, "err", err)
+	}
 	harness := ""
 	if hm, err := templateHarnesses(r.Context(), s.sc); err == nil {
 		harness = hm[template]

@@ -9,7 +9,7 @@
 // so credentials never land in the workspace checkpoint. They are re-injected on
 // a cold resume (the BYO-key tradeoff), and purged when the session is deleted.
 
-import { writeFileSync } from "node:fs";
+import { writeFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -133,4 +133,91 @@ export function setGitCredentials(creds) {
     spawnSync("git", ["config", "--global", "user.name", "agentplane"]);
   }
   return creds.length;
+}
+
+// ---- declarative repositories, cloned through the git proxy (#49) ----------
+
+// Point git at the proxy and give it the session grant, so the credential is
+// attached OUTSIDE this sandbox. Nothing secret is written here: the grant is
+// short-lived and scoped to this session's declared credentials, and the real
+// token never arrives.
+export function configureGitProxy({ proxyBase, grant, credential }) {
+  if (!proxyBase) return false;
+  // Never prompt. Without this, a 401 makes git block asking for a username
+  // that no one can type, and the clone fails with a message about terminals
+  // instead of about auth — which is what happened on the first live run.
+  process.env.GIT_TERMINAL_PROMPT = "0";
+  // The proxy authenticates on our behalf, so git must not go looking for
+  // credentials for the proxy host itself: `credential.helper store` (set by
+  // the legacy pull path) would otherwise try, find none, and prompt.
+  spawnSync("git", ["config", "--global", `credential.${proxyBase.replace(/\/$/, "")}.helper`, ""]);
+  // insteadOf rewrites https://github.com/... to the proxy, so the URL the
+  // model sees and types stays the normal public one.
+  spawnSync("git", ["config", "--global", `url.${proxyBase.replace(/\/$/, "")}/gh/.insteadOf`,
+    "https://github.com/"]);
+  // extraHeader travels with every git HTTP request; the proxy reads it to
+  // decide whose credential to attach, then strips it before calling upstream.
+  spawnSync("git", ["config", "--global", "--unset-all", "http.extraHeader"]);
+  if (grant) {
+    spawnSync("git", ["config", "--global", "--add", "http.extraHeader",
+      `X-Agentplane-Grant: ${grant}`]);
+  }
+  if (credential) {
+    spawnSync("git", ["config", "--global", "--add", "http.extraHeader",
+      `X-Agentplane-Credential: ${credential}`]);
+  }
+  // Verify rather than assume: spawnSync failures are silent, and a config that
+  // did not apply looks identical to one that did until a clone fails oddly.
+  const check = spawnSync("git", ["config", "--global", "--get-regexp", "^url\\."],
+    { encoding: "utf8" });
+  const applied = (check.stdout || "").includes(proxyBase.replace(/\/$/, ""));
+  if (!applied) {
+    console.error("git proxy config did NOT apply:", (check.stderr || check.stdout || "").slice(0, 200));
+  }
+  return applied;
+}
+
+// Clone the agent's declared repositories into the sandbox. Idempotent: an
+// existing checkout is left alone, because /workspace is durable and a session
+// resuming after a suspend must not lose uncommitted work.
+export function cloneRepositories(repos) {
+  const out = [];
+  for (const r of repos || []) {
+    const dest = r.mountPath;
+    if (!dest || !dest.startsWith("/workspace/")) {
+      out.push({ url: r.url, ok: false, reason: "mountPath must be under /workspace/" });
+      continue;
+    }
+    if (existsSync(`${dest}/.git`)) {
+      out.push({ url: r.url, ok: true, skipped: "already checked out" });
+      continue;
+    }
+    const args = ["clone"];
+    // A shallow clone by default: agents rarely need full history, and a large
+    // repo otherwise dominates session setup.
+    if (!r.checkout?.commit) args.push("--depth", "1");
+    if (r.checkout?.branch) args.push("--branch", r.checkout.branch);
+    else if (r.checkout?.tag) args.push("--branch", r.checkout.tag);
+    args.push(r.url, dest);
+
+    const res = spawnSync("git", args, {
+      encoding: "utf8", timeout: 10 * 60 * 1000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    if (res.status !== 0) {
+      // stderr can contain a URL; it never contains the token, which lives only
+      // in the proxy. Truncated so a huge git error cannot flood the log.
+      out.push({ url: r.url, ok: false, error: (res.stderr || "").trim().slice(0, 300) });
+      continue;
+    }
+    if (r.checkout?.commit) {
+      const co = spawnSync("git", ["-C", dest, "checkout", r.checkout.commit], { encoding: "utf8" });
+      if (co.status !== 0) {
+        out.push({ url: r.url, ok: false, error: `checkout ${r.checkout.commit}: ${(co.stderr || "").trim().slice(0, 200)}` });
+        continue;
+      }
+    }
+    out.push({ url: r.url, ok: true, mountPath: dest });
+  }
+  return out;
 }
