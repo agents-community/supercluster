@@ -1,6 +1,6 @@
 # Threat model
 
-**Scope:** the whole agentplane platform as *deployed today* (2026-08-03),
+**Scope:** the whole agentplane platform as *deployed today* (2026-08-04),
 not as designed. Every claim below cites the code or a live cluster check;
 where the intended design differs from reality, both are shown.
 
@@ -10,9 +10,9 @@ is fixed in code and still inactive in production for want of one env var.
 
 | | |
 |---|---|
-| FIXED | F1, F3, F4, F7, F8 |
-| PARTIAL | F5 (ingress only), F10 (code merged, not enabled) |
-| OPEN | F2, F6, F9, F11, F12 |
+| FIXED | F1, F3, F4, F5, F7, F8 |
+| PARTIAL | F6, F9 (git only), F10 (code merged, not enabled) |
+| OPEN | F2, F11, F12, F13 |
 
 Code is cited by *function*, not line number: every line-number citation in the
 first revision of this document had drifted within two days and pointed at
@@ -80,6 +80,7 @@ attacking, drawn as deployed rather than as designed.
 | Session metadata | **Firestore** `sessions/{sid}` — owner, agent, version pin, activity, usage | maps sessions to the people who own them; reveals who ran what and what it cost |
 | Agent definitions + version history | **Firestore** `agents/{name}/versions/{n}` — the submitted spec, verbatim | system prompts and tool policy; a writer could point new sessions at an attacker-authored agent |
 | Lifetime spend per user | **Firestore** `usage/{email}` | billing/usage disclosure, keyed by email |
+| Repository tokens in transit | **git-proxy** process memory, for the life of one request | the only component that resolves a git credential; holds no GCP access of its own and resolves through serve, so a compromise yields one user's token per grant rather than the vault |
 
 ## 2. Trust boundaries
 
@@ -127,7 +128,7 @@ unencrypted; `POST /v1/access` returns a token in cleartext.
 **Fix:** managed cert + HTTPS redirect before any external tester uses it; treat
 every token/credential issued over HTTP as compromised and rotate.
 
-### F5 — HIGH → MEDIUM — **PARTIAL** — Actor egress is unrestricted
+### F5 — HIGH — **FIXED** — Actor egress is unrestricted
 *Elevation of privilege / lateral movement.*
 
 **This finding's original claim — "zero NetworkPolicies in the cluster" — is no
@@ -147,24 +148,47 @@ network, and the GCP metadata server. Combined with the still-shared hand admin
 token (F3), one session can reach another session's hand admin plane — it just
 has to initiate the connection itself.
 
-Our own `infra/serve/networkpolicy.yaml` covers egress and is deliberately
-**unapplied**: a first attempt broke DNS for every actor (wrong pod label, plus
-Dataplane V2 + NodeLocal DNSCache resolving via a link-local address that
-`ipBlock: 0.0.0.0/0` does not match). Both causes are fixed in the file and
-neither is re-validated. See #22 / #25.
+**Fixed 2026-08-04**, on the third attempt. `actors-default-deny` +
+`actors-allow` are applied with `policyTypes: [Ingress, Egress]`. An actor can
+reach DNS, the atenet router, serve, the git proxy, the OTLP collectors and the
+public internet — and **not** the GCP metadata server or any private range.
+Verified live: `curl 169.254.169.254` from a pool-labelled pod times out.
 
-**Fix:** apply the egress half behind a live canary — mint a throwaway session,
-send one turn, confirm the reply lands *before* walking away. Deny the metadata
-server explicitly; it is the one destination that turns egress into credential
-theft.
+Two earlier attempts failed and each cost an outage, both for reasons that are
+invisible in the manifest:
 
-### F6 — MEDIUM — Snapshots contain live secrets
-*Information disclosure.* Documented already for BYO keys, but now also true of
-**vault credentials pulled into the hand** — its memory image lands in GCS.
-Anyone with bucket read gets user PATs.
+1. **NodeLocal DNSCache** answered the kube-dns *Service* ip on the **host**, so
+   DNS never reached a kube-dns pod. Under Cilium neither a `podSelector` nor an
+   `ipBlock` matches host-destined traffic, and the documented escape hatch
+   (`CiliumNetworkPolicy` with `toEntities: [host]`) does **not** exist on GKE
+   Dataplane V2 — those CRDs are not exposed. Disabling the addon makes DNS DNAT
+   to real kube-dns pods, which `podSelector` matches. **Re-enabling it silently
+   breaks every NetworkPolicy here.**
+2. **OTLP export to :4317 was denied** — 527 packets in two minutes — and the
+   brain went `STATUS_CRASHED` rather than degrading. A blocked exporter is not
+   a best-effort failure for the harness.
 
-**Fix:** CMEK + tight bucket IAM today; the real fix is the egress section below
-(F9/F11/F12), so the sandbox never holds credentials.
+The second was found with `cilium monitor --type drop` in the anetd pod, which
+prints the denied packet. The first two attempts inferred from symptoms. **Reach
+for the monitor first.**
+
+**Residual:** brain and hand share one policy, though their risk profiles are
+opposite — the brain runs no model-generated code and needs only its vendor API,
+while the hand runs untrusted code. Splitting them, with the hand's rules driven
+by `environment.networking.allowedHosts`, is the next step.
+
+### F6 — MEDIUM — **PARTIAL** — Snapshots contain live secrets
+*Information disclosure.* A snapshot captures **memory pages**, not just disk
+(`checkpoint.img`, `pages.img`, `pages_meta.img`), so any secret the sandbox
+holds — even one never written to a file — lands in GCS. Anyone with bucket read
+gets it.
+
+**Git repository tokens no longer enter the sandbox at all** (see the egress
+section below), which removes the case that mattered most. Still exposed: BYO
+vendor keys, and `env`/`header` credentials delivered by the legacy grant pull.
+
+**Fix:** CMEK + tight bucket IAM today; structurally, extend the git-proxy
+pattern to the remaining credential types so nothing is held in-sandbox.
 
 ### F10 — LOW — **PARTIAL (merged, not enabled)** — `InsecureSkipVerify` to ateapi
 *Spoofing.* `ateapiTLS()` now verifies the control plane against a PEM bundle at
@@ -182,16 +206,34 @@ underneath — but leaving it unset defeats the verification upstream added.
 **Fix:** mount the ate CA bundle and set `AGENTPLANE_ATEAPI_CA`; the code path
 already exists and the warning in the logs is the reminder.
 
-### F9 / F11 / F12 — HIGH — Egress is neither contained nor credential-free
+### F9 / F11 / F12 — HIGH → MEDIUM — **PARTIAL** — Egress is credential-free for git, not yet for anything else
 
 *Design gap.* These were three findings for one absent component; they are one
 story and read better as one.
 
-**Today:** the hand holds the credential. Serve grants it, the hand writes it to
-actor memory and `~/.git-credentials`, and it calls GitHub directly through the
-worker's NAT — no allowlist, no per-call audit, no central rotation, any
-destination reachable. It is in every checkpoint of that actor (F6). Verified:
-zero egress pods in the cluster.
+**Git is fixed (2026-08-04).** A `git-proxy` service attaches the user's
+credential **outside** the sandbox. Git in the hand is configured with
+`url.http://git-proxy.agentplane.svc/gh/.insteadOf https://github.com/`, so the
+actor speaks plain HTTP to an in-cluster service and that service makes the real
+HTTPS call with the token attached. No CA in the sandbox, no TLS terminated —
+which is what stalled the general gateway. The actor holds only the session
+grant (10-minute TTL, scoped to that session's declared credentials).
+
+This matters because a checkpoint captures **memory pages**
+(`checkpoint.img`, `pages.img`, `pages_meta.img`), so a token "only in memory"
+was still in the snapshot. It no longer enters the actor at all. Verified: the
+proxy logs `credential=gh-token` on the upstream call while the hand's
+repository path contains zero reads of a credential value.
+
+The proxy is a closed set of upstreams (an open relay attaching credentials to
+arbitrary destinations would be worse than the hole it closes), strips the grant
+headers before calling upstream, and does **not** follow redirects — following
+one would forward the credential to whatever host the redirect names.
+
+**Everything that is not git still holds its credential in the sandbox.** The
+legacy grant path writes `env` and `header` credentials into actor memory, and
+MCP upstream auth is resolved by serve and handed to the hand (#47). Those are
+the remaining F6 exposure.
 
 **Declared but inert (F9).** The AgentSpec carries `egress.mode` + `allowedHosts`
 for reachability and `credentials[].inject` binding a credential to the
@@ -228,6 +270,43 @@ injection, placeholder only where a client demands one. Never inject into the UR
 path; path-secret webhooks (Slack) are out of scope by design.
 
 **Until then, no document may imply the sandbox is secretless.**
+
+### F13 — HIGH — Subagent tool policy is not enforced by the harness
+*Elevation of privilege / sandbox escape.* The brain reasons and executes
+nothing; the hand executes. That split is enforced by the agent's `deny` list
+removing the brain's builtins. **It has failed.**
+
+An escrowed transcript from 2026-08-03 shows, under `starter-v3` whose spec
+denied `Bash`:
+
+```
+2026-08-03T05:12:06  Agent
+2026-08-03T05:12:16  Bash   input: {"command": "echo $((99991*7))"}
+```
+
+A subagent did not inherit the parent's tool policy, so model-generated code ran
+**in the brain**. This is a known upstream defect, not a misconfiguration:
+[claude-agent-sdk-typescript#172](https://github.com/anthropics/claude-agent-sdk-typescript/issues/172)
+("AgentDefinition.tools and disallowedTools are not enforced for subagent child
+processes") and
+[#189](https://github.com/anthropics/claude-agent-sdk-typescript/issues/189).
+
+It does not reproduce on the current harness. Two attempts under the failing
+shape left the subagent with no `Bash` at all. What changed was the image: the
+Dockerfile installed `@latest`, so three rebuilds during unrelated work silently
+changed a sandbox-boundary control. We digest-pin the brain image in the agent
+spec while building it from unpinned dependencies.
+
+**Mitigations in place:** harness versions pinned (`claude-code@2.1.220`,
+`claude-agent-sdk@0.3.220`); `smoke-live` step 8 asserts the boundary directly
+and fails the build if a denied builtin executes.
+
+**Not mitigated:** while #172 is open, per-subagent tool restriction cannot be
+relied on. Either block spawning at the parent (`permissions.deny:
+["Agent(...)"]`, documented) or ensure the parent's own tool set is safe in
+isolation. Note also that `allowedTools` is an auto-**approve** list, not a
+restriction — the SDK directs you to `tools` for that, and our harness does not
+use it. gVisor remains the boundary that does not depend on any of this.
 
 ### Accepted risks (deliberate, documented)
 
