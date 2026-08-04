@@ -20,17 +20,26 @@ systemPrompt: >-
   concise in chat and do the real work with your tools.
 deny: [Bash, Write, Edit, Read, Grep, Glob, NotebookEdit]
 turnDeadlineSeconds: 600
-# For a PRIVATE repo, store a git token (`PUT /v1/credentials/gh-token`) and
-# uncomment — the hand pulls it for the clone; it never enters this spec or the
-# brain. Public repos need nothing here.
 # Egress policy — declarative today (the gateway isn't deployed yet; see
-# egress/ and threat-model F9). Documents where this agent may talk and which
-# credential is injected where, so the sandbox never holds the value.
+# egress/ and threat-model F9). Documents where this agent may talk.
 egress:
   mode: limited
   allowedHosts: [github.com, api.github.com]
-credentials:
-  - name: gh-token
-    inject:
-      hosts: [github.com]
-      location: {header: true}
+
+# NO credential by default, deliberately.
+#
+# `credentials:` is pulled EAGERLY: serve grants it and the hand fetches the
+# value at session start, before the first message — so a session that only
+# says "hello" still copies your git token into the sandbox, where a checkpoint
+# captures it (snapshots include memory pages, not just disk). Declaring a
+# credential you rarely use is a standing cost with no benefit, and it makes
+# every session log a failed pull if you have not stored one.
+#
+# Public repos need nothing here. For a PRIVATE repo, store a token
+# (`andromeda cred set gh-token --type git`) and uncomment:
+#
+# credentials:
+#   - name: gh-token
+#     inject:
+#       hosts: [github.com]
+#       location: {header: true}

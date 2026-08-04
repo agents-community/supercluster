@@ -752,12 +752,16 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if err := s.owners.claim(r.Context(), sid, userOf(r), in.Agent, version); err != nil {
 		s.log.Error("owner claim failed — session left unowned", "session", sid, "user", userOf(r), "err", err)
 	}
-	if err := s.grantHandCredentials(r.Context(), sid, userOf(r), in.Agent); err != nil {
+	// Grant from the template this session actually runs on, NOT the logical
+	// agent name: `starter` resolves to the v1 template, so a credential removed
+	// in a later version would still be granted, and one added in a later
+	// version would not be (#32 regression).
+	if err := s.grantHandCredentials(r.Context(), sid, userOf(r), template); err != nil {
 		s.log.Warn("hand credential grant failed", "session", sid, "err", err)
 	}
 	harness := ""
 	if hm, err := templateHarnesses(r.Context(), s.sc); err == nil {
-		harness = hm[in.Agent]
+		harness = hm[template]
 	}
 	span(r).SetAttributes(attribute.String("agentplane.session", sid), attribute.String("agentplane.agent", in.Agent))
 	s.log.Info("session created", "session", sid, "agent", in.Agent, "harness", harness, "user", userOf(r))
