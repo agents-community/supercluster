@@ -21,7 +21,7 @@ spec:
         # NOT a placeholder — applying this file must never break the running
         # deployment. `PROJECT_ID`/`:latest` here produced InvalidImageName on
         # a plain `kubectl apply`. Bump the tag here when you deploy.
-        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v28
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-serve:v29
         ports: [{ containerPort: 7433, name: http }]
         env:
         # Per-user tokens: serve reads this JSON file ({"user":"token"}) from a
@@ -39,7 +39,7 @@ spec:
         # the brain saw its hand MCP "pending" forever, and every session ran
         # tool-less. Rebaking under a new name avoids deleting the old
         # template out from under live sessions.
-        - { name: BRAIN_HAND_TEMPLATE, value: "hand-v3" }
+        - { name: BRAIN_HAND_TEMPLATE, value: "hand-v4" }
         # Hand gateway: the shared token serve uses to inject federated MCP
         # upstreams + credentials into a session's hand (/admin/upstreams).
         # Grant-signing key — MUST differ from HAND_ADMIN_TOKEN (F3): that
