@@ -33,8 +33,9 @@ spec:
         - { name: SUBSTRATE_ATEAPI, value: "api.ate-system.svc:443" }
         - { name: SUBSTRATE_ATENET, value: "atenet-router.ate-system.svc:80" }
         - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
-        # The hand template new sessions are paired with. Bumped to hand-v2
-        # because the original `hand` golden was baked before the Substrate
+        # The hand template new sessions are paired with. Versioned because a
+        # hand image change needs a fresh golden, and the original `hand`
+        # golden was baked before the Substrate
         # upgrade: it could no longer restore, so hand actors never started,
         # the brain saw its hand MCP "pending" forever, and every session ran
         # tool-less. Rebaking under a new name avoids deleting the old
