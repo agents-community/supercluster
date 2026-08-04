@@ -1,4 +1,4 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: [build, -f, Dockerfile.codex, -t, gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-codex:x3, .]
-images: [gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-codex:x3]
+  args: [build, -f, Dockerfile.codex, -t, ${IMAGE_REPO}/agentplane-brain-codex:${BRAIN_CODEX_TAG}, .]
+images: [${IMAGE_REPO}/agentplane-brain-codex:${BRAIN_CODEX_TAG}]

@@ -1,4 +1,4 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: [build, -f, Dockerfile.pi, -t, gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-pi:p4, .]
-images: [gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-pi:p4]
+  args: [build, -f, Dockerfile.pi, -t, ${IMAGE_REPO}/agentplane-brain-pi:${BRAIN_PI_TAG}, .]
+images: [${IMAGE_REPO}/agentplane-brain-pi:${BRAIN_PI_TAG}]
