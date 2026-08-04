@@ -60,9 +60,20 @@ func (v *vault) parent() string { return "projects/" + v.project }
 // nor unambiguous — "a" + "b-c" and "a-b" + "c" would collide — and hashing
 // also keeps user emails out of GCP resource names. `name` is validated by
 // credNameRe before it reaches here.
-func (v *vault) secretID(user, name string) string {
+// userTag is the stable, label-safe form of a user identity.
+//
+// It exists because GCP labels accept only [\p{Ll}\p{Lo}\p{N}_-]: an email's
+// "." and "@" are rejected outright, so labelling secrets with the raw address
+// made PUT /v1/credentials fail for every real user — the vault only ever
+// worked for test names like "alice". Hex of a hash is label-safe by
+// construction and matches the id prefix, so listing and naming agree.
+func userTag(user string) string {
 	sum := sha256.Sum256([]byte(user))
-	return fmt.Sprintf("agentplane-cred-%s-%s", hex.EncodeToString(sum[:8]), name)
+	return hex.EncodeToString(sum[:8])
+}
+
+func (v *vault) secretID(user, name string) string {
+	return fmt.Sprintf("agentplane-cred-%s-%s", userTag(user), name)
 }
 
 // put creates the secret (if absent) and adds a new version holding the payload.
@@ -79,7 +90,7 @@ func (v *vault) put(ctx context.Context, user, name string, p credPayload) error
 				Replication: &secretmanagerpb.Replication_Automatic_{Automatic: &secretmanagerpb.Replication_Automatic{}},
 			},
 			// Label enables per-user listing without leaking cross-user names.
-			Labels: map[string]string{"agentplane_user": user, "agentplane_cred": "1"},
+			Labels: map[string]string{"agentplane_user": userTag(user), "agentplane_cred": "1"},
 		},
 	})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
@@ -114,9 +125,11 @@ func (v *vault) delete(ctx context.Context, user, name string) error {
 func (v *vault) list(ctx context.Context, user string) ([]string, error) {
 	it := v.client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{
 		Parent: v.parent(),
-		Filter: "labels.agentplane_user=" + user,
+		Filter: "labels.agentplane_user=" + userTag(user),
 	})
-	prefix := fmt.Sprintf("agentplane-cred-%s-", user)
+	// Must use the same tag as secretID, or the prefix strips nothing and the
+	// filter matches nothing — listing silently returned empty before this.
+	prefix := fmt.Sprintf("agentplane-cred-%s-", userTag(user))
 	var out []string
 	for {
 		s, err := it.Next()

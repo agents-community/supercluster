@@ -435,7 +435,10 @@ func deleteSession(ctx context.Context, sc sessionCtx, sid, brain string) error 
 
 // createSession mints a session id and creates its brain actor from the given
 // agent (template). Shared by `session new` and `serve`.
-func createSession(ctx context.Context, sc sessionCtx, agent string) (string, error) {
+// createSession mints a session. user and v carry the caller's identity and
+// credential vault so per-user MCP auth can be resolved at setup (#46); the CLI
+// passes ("", nil) and gets unauthenticated upstreams.
+func createSession(ctx context.Context, sc sessionCtx, agent, user string, v *vault) (string, error) {
 	sid, err := naming.NewSessionID()
 	if err != nil {
 		return "", err
@@ -494,7 +497,7 @@ func createSession(ctx context.Context, sc sessionCtx, agent string) (string, er
 		// sees those tools too. Best-effort: on failure the hand still serves its
 		// own bash/fs tools. Must happen here, before the first message, because
 		// the brain lists tools when it connects.
-		if err := injectHandUpstreams(ctx, sc, sid, agent); err != nil {
+		if err := injectHandUpstreams(ctx, sc, sid, agent, user, v); err != nil {
 			log.Printf("warn: federate hand upstreams for %s: %v", sid, err)
 		}
 	}
@@ -506,6 +509,10 @@ func createSession(ctx context.Context, sc sessionCtx, agent string) (string, er
 type mcpSrv struct {
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers,omitempty"`
+	// HeadersFrom holds vault credential NAMES, not values (#46). Serve
+	// resolves them per session for the user who created it, so the secret
+	// never lives on the template, in agent version history, or in a snapshot.
+	HeadersFrom map[string]agentspec.CredentialRef `json:"headersFrom,omitempty"`
 }
 
 // templateMCP reads the agent template's embedded spec and returns its mcp map.
@@ -553,7 +560,40 @@ func templateCredentials(ctx context.Context, sc sessionCtx, agent string) ([]st
 // /admin/upstreams over atenet. The hand connects outward to each (attaching the
 // credential) and re-publishes their tools as its own. Retries the wake race —
 // the hand may be cold, and the POST triggers atenet's auto-resume.
-func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent string) error {
+// resolveHeaders looks up each headersFrom reference in the caller's vault and
+// renders it into a header value. Missing entries are skipped with a warning
+// rather than failing the session: an upstream the user has not connected yet
+// should degrade to "that tool needs auth", not "no session for you".
+func resolveHeaders(ctx context.Context, v *vault, user, srvName string, srv mcpSrv) map[string]string {
+	if len(srv.HeadersFrom) == 0 {
+		return srv.Headers
+	}
+	out := map[string]string{}
+	for k, val := range srv.Headers {
+		out[k] = val
+	}
+	if v == nil {
+		log.Printf("warn: mcp %q needs vault credentials but the vault is disabled", srvName)
+		return out
+	}
+	for header, ref := range srv.HeadersFrom {
+		p, err := v.access(ctx, user, ref.Credential)
+		if err != nil || p.Value == "" {
+			log.Printf("warn: mcp %q header %q: no vault credential %q for %s — upstream will be unauthenticated",
+				srvName, header, ref.Credential, user)
+			continue
+		}
+		out[header] = ref.Render(p.Value)
+		// Names and provenance only — never the value. "Did my credential get
+		// attached?" is the first question when an upstream 401s, and answering
+		// it should not require logging the secret to find out.
+		log.Printf("mcp %q: header %q resolved from vault credential %q for %s (%d bytes)",
+			srvName, header, ref.Credential, user, len(p.Value))
+	}
+	return out
+}
+
+func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent, user string, v *vault) error {
 	mcp, err := templateMCP(ctx, sc, agent)
 	if err != nil || len(mcp) == 0 {
 		return err // nothing to federate — the hand still serves its own tools
@@ -565,7 +605,10 @@ func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent string) 
 	}
 	ups := make([]upstream, 0, len(mcp))
 	for name, cfg := range mcp {
-		ups = append(ups, upstream{Name: name, URL: cfg.URL, Headers: cfg.Headers})
+		ups = append(ups, upstream{
+			Name: name, URL: cfg.URL,
+			Headers: resolveHeaders(ctx, v, user, name, cfg),
+		})
 	}
 	body, _ := json.Marshal(map[string]any{"upstreams": ups})
 	hand := naming.HandActor(sid)
