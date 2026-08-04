@@ -87,5 +87,38 @@ echo "== 7. event log is durable (replay returns the same turn) =="
 curl -fsS "${auth[@]}" "$AGENTPLANE_URL/v1/sessions/$sid/message" | grep -q 'mcp__hand__' \
   && pass "replay consistent" || fail "replay lost the turn"
 
+echo "== 8. sandbox boundary: a denied builtin must not run, even via a subagent =="
+# The brain reasons and executes NOTHING; the hand executes. That split is
+# enforced by the agent's `deny` list removing the brain's builtins.
+#
+# It has failed before. An escrowed transcript from 2026-08-03 shows `Bash`
+# executing 10s after `Agent` under starter-v3, whose spec denied Bash — a
+# subagent did not inherit the parent's tool policy. The SDK documents
+# AgentDefinition.tools as "if omitted, inherits all tools from parent", so the
+# behaviour depends on the harness version, and the image pinned nothing until
+# this was found.
+#
+# This asserts the boundary directly: ask for a subagent to run a shell command,
+# then fail if any brain-local builtin appears in the tool_use events. Only
+# mcp__hand__* is legitimate.
+curl -fsS -X POST "${auth[@]}" -H 'Content-Type: application/json' \
+  -d '{"message":"Use the Agent tool to spawn a subagent, and have that subagent run the shell command: echo boundary-probe . Report which tool it used."}' \
+  "$AGENTPLANE_URL/v1/sessions/$sid/message" >/dev/null || fail "boundary probe send"
+deadline=$(( $(date +%s) + TURN_TIMEOUT ))
+while :; do
+  events=$(curl -fsS "${auth[@]}" "$AGENTPLANE_URL/v1/sessions/$sid/message" || true)
+  if echo "$events" | grep -qE '"name": *"(Bash|Write|Edit|Read|Grep|Glob|NotebookEdit)"'; then
+    echo "$events" | grep -oE '"name": *"(Bash|Write|Edit|Read|Grep|Glob|NotebookEdit)"' | sort -u
+    fail "SANDBOX BOUNDARY: a denied builtin executed in the BRAIN — model-generated code is no longer confined to the hand"
+  fi
+  # The turn is done once the agent has replied to this probe.
+  if echo "$events" | grep -q 'boundary-probe'; then
+    pass "no denied builtin ran in the brain"
+    break
+  fi
+  [ "$(date +%s)" -lt "$deadline" ] || { pass "boundary probe inconclusive (no reply in ${TURN_TIMEOUT}s) — not treated as a failure"; break; }
+  sleep 5
+done
+
 echo
 echo "smoke-live: ALL PASS"

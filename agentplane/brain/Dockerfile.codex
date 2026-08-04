@@ -12,7 +12,11 @@ RUN apt-get update \
 
 
 WORKDIR /app
-RUN npm install @openai/codex-sdk@latest && npm cache clean --force
+# PINNED. With @latest, two builds of the same file ship different harness
+# behaviour — that silently changed a sandbox-boundary control once already
+# (see agentplane/brain/Dockerfile). Bump deliberately.
+ARG CODEX_SDK_VERSION=0.146.0
+RUN npm install "@openai/codex-sdk@${CODEX_SDK_VERSION}" && npm cache clean --force
 
 COPY server.mjs runtime.mjs identity.mjs /app/
 COPY harness /app/harness

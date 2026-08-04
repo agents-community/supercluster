@@ -12,7 +12,11 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN npm install @earendil-works/pi-coding-agent@latest \
+# PINNED. With @latest, two builds of the same file ship different harness
+# behaviour — that silently changed a sandbox-boundary control once already
+# (see agentplane/brain/Dockerfile). Bump deliberately.
+ARG PI_AGENT_VERSION=0.83.0
+RUN npm install "@earendil-works/pi-coding-agent@${PI_AGENT_VERSION}" \
   && npm cache clean --force
 
 COPY server.mjs runtime.mjs identity.mjs /app/
