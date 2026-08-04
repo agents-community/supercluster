@@ -1,0 +1,52 @@
+# The git proxy: attaches a user's credential to outbound git traffic OUTSIDE
+# the sandbox, so the token never enters an actor and cannot be captured by a
+# checkpoint (#49).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentplane-gitproxy
+  namespace: agentplane
+  labels: { app: agentplane-gitproxy }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: agentplane-gitproxy }
+  template:
+    metadata:
+      labels: { app: agentplane-gitproxy }
+    spec:
+      # Same SA as serve: it needs no GCP access of its own — it resolves
+      # credentials THROUGH serve, which owns the vault. Giving it direct
+      # Secret Manager access would widen the blast radius for no benefit.
+      serviceAccountName: agentplane-serve
+      containers:
+      - name: gitproxy
+        image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-gitproxy:g1
+        env:
+        - { name: AGENTPLANE_SERVE_BASE, value: "http://agentplane-serve.agentplane.svc:7433" }
+        - { name: GITPROXY_ADDR, value: ":8080" }
+        ports:
+        - { containerPort: 8080 }
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          periodSeconds: 20
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-proxy
+  namespace: agentplane
+spec:
+  selector: { app: agentplane-gitproxy }
+  ports:
+  - { port: 80, targetPort: 8080 }
