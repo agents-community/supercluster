@@ -333,6 +333,26 @@ func initMetrics(logger *slog.Logger) (func(), metric.Float64Histogram) {
 // handleReadyz reports whether serve can actually reach the control plane.
 // Unauthenticated on purpose: it exposes no data, and a probe that needs a
 // token is one more thing that can fail for reasons unrelated to health.
+// actorStatus reports an actor's Substrate status without probing it — probing
+// a suspended actor would resume it, which is the thing the caller is trying to
+// decide about.
+func (s *server) actorStatus(ctx context.Context, name string) (string, error) {
+	ctrl, closeFn, err := s.sc.dial()
+	if err != nil {
+		return "", err
+	}
+	defer closeFn()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := ctrl.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: s.sc.atespace, Name: name},
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetStatus().String(), nil
+}
+
 func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -1018,6 +1038,19 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	waking := false
 	var resp *http.Response
+
+	// Waking a sleeping mind wakes the BRAIN. The paired hand resumes only when
+	// something connects to it, so the brain can start its turn against a hand
+	// that is not serving yet — Claude Code caches the tool list at init, so
+	// that turn runs tool-less and, in practice, ends without a reply. The
+	// user's first message after coming back is silently swallowed; the second
+	// works. That lands on exactly the moment the product is sold on.
+	//
+	// createSession already waits for the hand; the wake path did not. Bounded
+	// and non-fatal: a slow hand should delay the first turn, never lose it.
+	if st, err := s.actorStatus(r.Context(), brain); err == nil && st != "STATUS_RUNNING" {
+		waitHandReady(r.Context(), s.sc, sid, handReadyTimeout)
+	}
 	for attempt := 1; attempt <= 4; attempt++ {
 		req := s.brainReq(r.Context(), http.MethodPost, brain,
 			"/v1/sessions/"+brain+"/events", strings.NewReader(string(body)))

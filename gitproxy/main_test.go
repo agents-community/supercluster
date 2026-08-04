@@ -146,3 +146,23 @@ func TestParseUpstreams(t *testing.T) {
 		t.Errorf("malformed entries kept: %v", got)
 	}
 }
+
+// A public repo needs no credential. Defaulting to a well-known name made the
+// proxy do a doomed vault lookup and log `failed:gh-token`, which reads as an
+// auth failure when the agent simply declared no credential.
+func TestNoCredentialNamedMeansNoLookup(t *testing.T) {
+	looked := false
+	serve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		looked = true
+		http.Error(w, "should not be called", http.StatusNotFound)
+	}))
+	defer serve.Close()
+	p := newTestProxy(serve.URL)
+	req := httptest.NewRequest(http.MethodGet, "/gh/o/r/info/refs", nil)
+	req.Header.Set(grantHeader, "grant-abc") // grant present, but no credential named
+	rec := httptest.NewRecorder()
+	p.handle(rec, req)
+	if looked {
+		t.Error("the proxy asked serve for a credential the session never named")
+	}
+}
