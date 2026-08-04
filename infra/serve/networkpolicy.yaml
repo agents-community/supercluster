@@ -1,6 +1,26 @@
 # Default-deny for the actor pools (threat-model F5).
 #
-# !! NOT APPLIED YET — see issue #25. A first attempt on 2026-08-01 broke DNS
+# !! NOT APPLIED — TWO failed canaries now (2026-08-01 and 2026-08-04).
+#
+# 2026-08-04, second attempt, WITH the label and NodeLocal-DNS fixes below and
+# with explicit serve/gitproxy egress added: applying it stalled every turn.
+# A session that worked seconds earlier stopped progressing (tool calls frozen),
+# and a NEW session produced no reply and no tools at all. Rolled back within
+# ~3 minutes; a fresh session then worked immediately, so the policy was the
+# cause and the rollback is clean.
+#
+# What was NOT established: WHY. No DNS errors appeared in the brain logs, and
+# `cat /etc/resolv.conf` in a worker returned nothing, so the resolver the
+# actors actually use is still unknown. One candidate: kube-dns is reached at
+# its SERVICE ip (34.118.224.10) and under Dataplane V2 the podSelector rule
+# may be evaluated against that ip rather than the backing pod. That is a
+# hypothesis, not a finding.
+#
+# DO NOT apply again from a hypothesis. The next attempt needs a way to observe
+# the drop — a Cilium policy trace, or a scratch WorkerPool selected by its own
+# label so a failure cannot take real sessions with it.
+#
+# Original note follows. See #25. A first attempt on 2026-08-01 broke DNS
 # for every actor (brain: "API Error: Unable to connect to API (ENOTIMP)") and
 # was rolled back within minutes. Two reasons, both now fixed below but NOT yet
 # re-validated on a canary:
@@ -80,6 +100,22 @@ spec:
   - to:                                   # the router (brain→hand MCP, actor→ingress)
     - namespaceSelector:
         matchLabels: { kubernetes.io/metadata.name: ate-system }
+  # serve, for the hand's credential pull (GET /v1/hand/credentials/<name>,
+  # authorized by the session grant). Named explicitly rather than relying on
+  # the service CIDR falling outside the `except` list below — that is true on
+  # this cluster (services are 34.118.x, pods 10.68.x) and is not portable.
+  - to:
+    - podSelector:
+        matchLabels: { app: agentplane-serve }
+    ports:
+    - { protocol: TCP, port: 7433 }
+  # the git proxy: this is how git traffic leaves, and the whole reason a
+  # repository token never has to enter the sandbox.
+  - to:
+    - podSelector:
+        matchLabels: { app: agentplane-gitproxy }
+    ports:
+    - { protocol: TCP, port: 8080 }
   - to:                                   # the internet: vendor APIs, git, registries
     - ipBlock:
         cidr: 0.0.0.0/0
