@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -498,11 +499,44 @@ func createSession(ctx context.Context, sc sessionCtx, agent, user string, v *va
 		// sees those tools too. Best-effort: on failure the hand still serves its
 		// own bash/fs tools. Must happen here, before the first message, because
 		// the brain lists tools when it connects.
-		if err := injectHandUpstreams(ctx, sc, sid, agent, user, v); err != nil {
+		federated := map[string][]string{}
+		if err := injectHandUpstreams(ctx, sc, sid, agent, user, v, federated); err != nil {
 			log.Printf("warn: federate hand upstreams for %s: %v", sid, err)
+		}
+		// Now that the upstreams' real tool names are known, translate the
+		// spec's tool policy into them and push it to the brain (#58). Must
+		// precede the first message: the harness reads its options when it
+		// starts, and the brain lists tools when it connects.
+		if deny := resolveFederatedDeny(templateAllow(ctx, sc, agent), federated); len(deny) > 0 {
+			if err := pushBrainOptions(ctx, sc, sid, deny); err != nil {
+				// The brain keeps the spec's policy, so this is a restriction we
+				// failed to add — loud, because it is a silent widening otherwise.
+				log.Printf("WARN: session %s runs WITHOUT %d federated tool restriction(s): %v",
+					sid, len(deny), err)
+			}
 		}
 	}
 	return sid, nil
+}
+
+// templateAllow reads the agent's `allow` list off the compiled template.
+func templateAllow(ctx context.Context, sc sessionCtx, agent string) []string {
+	out, err := runKubectl(ctx, "get", "actortemplate", "-n", sc.templateNS,
+		"-o", `jsonpath={.spec.containers[0].env[?(@.name=="AGENTPLANE_SPEC")].value}`, "--", agent)
+	if err != nil {
+		return nil
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return nil
+	}
+	var rt struct {
+		Allow []string `json:"allow"`
+	}
+	if json.Unmarshal([]byte(raw), &rt) != nil {
+		return nil
+	}
+	return rt.Allow
 }
 
 // mcpSrv mirrors the mcp entries encoded in AGENTPLANE_SPEC (json tags), so we
@@ -705,7 +739,91 @@ func resolveHeaders(ctx context.Context, v *vault, user, srvName string, srv mcp
 	return out
 }
 
-func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent, user string, v *vault) error {
+// resolveFederatedDeny turns spec-level tool policy into the runtime tool names
+// the model will actually see (#58).
+//
+// The spec is compiled onto the template before any upstream is dialled, so it
+// cannot name a federated tool: at that point nobody knows a `github` server
+// exposes `create_issue`. The hand reports that at session setup, and the model
+// sees it as `mcp__hand__github__create_issue`.
+//
+// The rule: naming ANY tool of an upstream turns that upstream into an
+// allow-list. `allow: [github/create_issue]` permits that one and denies the
+// rest of github's tools. An upstream nobody names is untouched, so adding this
+// changes nothing for specs that do not use it.
+//
+// Returns only DENIALS. That is deliberate — the result is unioned with the
+// spec's own deny list downstream, so this can only ever remove capability. A
+// bug here cannot grant a tool the operator disabled.
+func resolveFederatedDeny(allow []string, federated map[string][]string) []string {
+	if len(federated) == 0 {
+		return nil
+	}
+	// upstream -> the tools explicitly permitted on it
+	permitted := map[string]map[string]bool{}
+	for _, a := range allow {
+		up, tool, ok := strings.Cut(a, "/")
+		if !ok || up == "" || tool == "" {
+			continue // a plain tool name (Bash, …) — not our concern
+		}
+		if permitted[up] == nil {
+			permitted[up] = map[string]bool{}
+		}
+		permitted[up][tool] = true
+	}
+	if len(permitted) == 0 {
+		return nil
+	}
+	var deny []string
+	for up, tools := range federated {
+		want := permitted[up]
+		if want == nil {
+			continue // this upstream was not scoped; leave it alone
+		}
+		if want["*"] {
+			continue // explicit "all of this upstream"
+		}
+		for _, t := range tools {
+			if !want[t] {
+				deny = append(deny, fmt.Sprintf("mcp__hand__%s__%s", up, t))
+			}
+		}
+	}
+	sort.Strings(deny) // stable, so a redeploy does not churn the pushed policy
+	return deny
+}
+
+// pushBrainOptions hands the resolved restrictions to the brain. Best-effort by
+// necessity — but the failure direction matters: without it the brain keeps the
+// spec's policy, so a missed push is a missing restriction, never an opening.
+func pushBrainOptions(ctx context.Context, sc sessionCtx, sid string, deny []string) error {
+	if len(deny) == 0 {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{"disallowedTools": deny})
+	brain := naming.BrainActor(sid)
+	url := fmt.Sprintf("http://%s/v1/sessions/%s/options", sc.atenet, brain)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Host = naming.ActorDNS(brain, sc.atespace)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("brain rejected options: HTTP %d", resp.StatusCode)
+	}
+	log.Printf("session %s: %d federated tool(s) denied by spec policy", sid, len(deny))
+	return nil
+}
+
+// federated maps upstream name -> tool names, filled in by injectHandUpstreams
+// so the caller can turn spec-level tool policy into runtime tool names (#58).
+func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent, user string, v *vault, federated map[string][]string) error {
 	mcp, err := templateMCP(ctx, sc, agent)
 	if err != nil || len(mcp) == 0 {
 		return err // nothing to federate — the hand still serves its own tools
@@ -737,9 +855,24 @@ func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent, user st
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp.StatusCode < 500 {
+			out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			if resp.StatusCode >= 400 {
 				return fmt.Errorf("hand rejected upstreams: HTTP %d", resp.StatusCode)
+			}
+			// The hand answers with the tools each upstream actually exposes.
+			// Those names exist nowhere else — the spec was compiled before any
+			// upstream was dialled — so this is the only chance to learn them.
+			var reg struct {
+				Registered []struct {
+					Name  string   `json:"name"`
+					Tools []string `json:"tools"`
+				} `json:"registered"`
+			}
+			if json.Unmarshal(out, &reg) == nil {
+				for _, u := range reg.Registered {
+					federated[u.Name] = u.Tools
+				}
 			}
 			return nil
 		}

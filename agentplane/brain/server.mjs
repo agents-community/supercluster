@@ -69,6 +69,26 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  // Harness options resolved by serve (#58). The spec is compiled onto the
+  // template BEFORE anything is connected, so it cannot name a federated MCP
+  // tool — those names exist only once the hand has dialled the upstream.
+  // serve learns them at session setup and pushes the resolved policy here.
+  //
+  // Narrowing ONLY, enforced in setResolvedOptions: a pushed policy is unioned
+  // with the spec's deny list and can never remove from it. What the user
+  // disabled stays disabled, whatever serve sends. A push that never arrives
+  // is therefore a missing restriction, not an open door.
+  if (url.pathname.match(/^\/v1\/sessions\/[^/]+\/options$/) && req.method === "POST") {
+    let body;
+    try { body = JSON.parse((await readBody(req)) || "{}"); }
+    catch { res.writeHead(400); return res.end(JSON.stringify({ error: "invalid json" })); }
+    const applied = rt.setResolvedOptions({
+      disallowedTools: Array.isArray(body.disallowedTools) ? body.disallowedTools : [],
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ ok: true, ...applied }));
+  }
+
   const m = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/events(\/stream)?$/);
   if (!m) { res.writeHead(404); return res.end("not found"); }
 
