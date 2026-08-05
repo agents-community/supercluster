@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -511,7 +512,24 @@ func createSession(ctx context.Context, sc sessionCtx, agent, user string, v *va
 		// Stash rather than push: the brain is not reachable yet at create — it
 		// wakes on the first message — so pushing here reliably 504s. The send
 		// path applies it, where the brain is already being woken.
-		if deny := resolveFederatedDeny(templateAllow(ctx, sc, agent), federated); len(deny) > 0 {
+		allow := templateAllow(ctx, sc, agent)
+		// An allow entry that matches nothing is a misconfiguration that fails
+		// OPEN, so it stops session creation rather than being logged (#58).
+		// Misspell the upstream — `gihub/list_issues` — and the real `github`
+		// is never scoped, so every one of its tools stays permitted and the
+		// spec reads as if it restricted them. This is the same class of
+		// silent no-op as `allow: [mcp__github__*]`, which is what prompted the
+		// whole resolution path.
+		if bad := unmatchedScopes(allow, federated); len(bad) > 0 {
+			// Roll back: the actors exist by now, and leaving them behind would
+			// strand a brain and a hand for a session no caller ever learns of.
+			if derr := deleteSession(ctx, sc, sid, naming.BrainActor(sid)); derr != nil {
+				log.Printf("warn: rollback of %s after invalid tool policy: %v", sid, derr)
+			}
+			return "", fmt.Errorf("agent %q allows tools that no connected MCP server exposes: %s "+
+				"(connected: %s)", agent, strings.Join(bad, ", "), strings.Join(upstreamNames(federated), ", "))
+		}
+		if deny := resolveFederatedDeny(allow, federated); len(deny) > 0 {
 			rememberFederatedDeny(sid, deny)
 			log.Printf("session %s: %d federated tool(s) will be denied on first turn", sid, len(deny))
 		}
@@ -777,6 +795,63 @@ func takeFederatedDeny(sid string) []string {
 // Returns only DENIALS. That is deliberate — the result is unioned with the
 // spec's own deny list downstream, so this can only ever remove capability. A
 // bug here cannot grant a tool the operator disabled.
+// upstreamNames lists the connected upstreams, sorted, for error messages —
+// "you wrote gihub, these are the servers that actually connected" is the whole
+// diagnosis.
+func upstreamNames(federated map[string][]string) []string {
+	names := make([]string, 0, len(federated))
+	for up := range federated {
+		names = append(names, up)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return []string{"none"}
+	}
+	return names
+}
+
+// unmatchedScopes returns spec allow entries of the form `upstream/tool` that
+// name something the hand did not report.
+//
+// Two shapes, both misconfigurations, only one of which is dangerous:
+//
+//   - Unknown UPSTREAM. Fails open — the upstream the author meant is left
+//     unscoped, so every tool on it stays permitted while the spec looks like
+//     it restricted them.
+//   - Unknown TOOL on a known upstream. Fails closed, because naming any tool
+//     turns that upstream into an allow-list and the misspelling matches
+//     nothing. Safe, but the agent silently cannot do the one thing it was
+//     allowed to, which is worth failing on rather than debugging later.
+//
+// Returns nothing when no upstream connected at all: the tools do not exist, so
+// nothing is granted, and failing a session because a third-party MCP server is
+// down would be a worse outcome than running without its tools.
+func unmatchedScopes(allow []string, federated map[string][]string) []string {
+	if len(federated) == 0 {
+		return nil
+	}
+	var bad []string
+	for _, a := range allow {
+		up, tool, ok := strings.Cut(a, "/")
+		if !ok || up == "" || tool == "" {
+			continue // a plain tool name (Bash, …) — not our concern
+		}
+		tools, known := federated[up]
+		if !known {
+			bad = append(bad, a+" (no such server)")
+			continue
+		}
+		if tool == "*" {
+			continue
+		}
+		if !slices.Contains(tools, tool) {
+			bad = append(bad, a+" (server has no such tool)")
+		}
+	}
+	sort.Strings(bad)
+	return bad
+}
+
 func resolveFederatedDeny(allow []string, federated map[string][]string) []string {
 	if len(federated) == 0 {
 		return nil
