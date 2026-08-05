@@ -24,7 +24,10 @@ export const claudeCode = {
   name: "claude-code",
 
   // AgentSpec → Agent SDK options. Pure; unit-testable in isolation.
-  optionsFromSpec(spec, resumeId, workdir) {
+  // resolvedDisallow comes from serve (#58) and is UNIONED with the spec's own
+  // deny list — never substituted for it. A tool the user disabled stays
+  // disabled regardless of what the control plane sends.
+  optionsFromSpec(spec, resumeId, workdir, resolvedDisallow = []) {
     const opts = {
       cwd: workdir,
       permissionMode: "dontAsk",
@@ -54,6 +57,11 @@ export const claudeCode = {
     }
     if (Array.isArray(spec.allow)) opts.allowedTools.push(...spec.allow);
     if (Array.isArray(spec.deny)) opts.disallowedTools.push(...spec.deny);
+    // Serve's additions land last and can only add. Deduped so a tool named in
+    // both does not appear twice.
+    if (Array.isArray(resolvedDisallow) && resolvedDisallow.length) {
+      opts.disallowedTools = [...new Set([...opts.disallowedTools, ...resolvedDisallow])];
+    }
     if (resumeId) opts.resume = resumeId;
     return opts;
   },
@@ -63,7 +71,7 @@ export const claudeCode = {
     // here (single-session actor) applies the per-session key for this turn;
     // absent, the image's shared env key stays in effect.
     if (ctx.apiKey) process.env.ANTHROPIC_API_KEY = ctx.apiKey;
-    const options = this.optionsFromSpec(ctx.spec, ctx.sessionId, ctx.workdir);
+    const options = this.optionsFromSpec(ctx.spec, ctx.sessionId, ctx.workdir, ctx.resolvedDisallow);
     const q = query({ prompt: asUserMessages(inputs), options });
     // The watchdog's lever: interrupting the live SDK query tears down a wedged
     // in-flight turn (finding #1). The runtime aborts the signal on deadline.

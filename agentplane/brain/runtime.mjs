@@ -57,6 +57,10 @@ export function createRuntime({ workdir, spec, harness, identity }) {
   // that started it. Held here because a turn completes asynchronously, long
   // after the HTTP response that queued it.
   let turnSpan = null;
+  // Tool restrictions resolved by serve at session setup (#58). Kept separate
+  // from the spec so the merge direction is unambiguous: this only ever ADDS to
+  // what the spec denies.
+  let resolvedDisallow = [];
   let turnStartedAt = 0;
   let delivered = [];        // pulled into the harness, no result yet (re-queue on teardown)
   let sessionId = existsSync(SESSION_ID_FILE) ? readFileSync(SESSION_ID_FILE, "utf8").trim() : null;
@@ -133,6 +137,9 @@ export function createRuntime({ workdir, spec, harness, identity }) {
       let timedOut = false;
       const ctx = {
         spec, workdir,
+        // Serve-resolved restrictions, read fresh each turn so a push mid-session
+        // applies to the next one.
+        get resolvedDisallow() { return resolvedDisallow; },
         get sessionId() { return sessionId; },
         setSessionId,
         get apiKey() { return apiKey; }, // BYO-key override, else null → env
@@ -236,6 +243,24 @@ export function createRuntime({ workdir, spec, harness, identity }) {
     setApiKey(k) { apiKey = k || null; },
     health() {
       return { ok: true, session: identity(), harness: harness.name, sdk_session_id: sessionId, busy, queued: queue.length, last_event_at: lastEventAt, events: seq, keyed: apiKey != null, usage };
+    },
+    // Apply tool restrictions resolved by serve.
+    //
+    // UNION with the spec, never replace. If the user disabled a tool it stays
+    // disabled no matter what serve sends — a control plane bug must not be able
+    // to re-enable something an operator turned off. The reverse direction is
+    // the whole point: serve can only take tools away.
+    setResolvedOptions({ disallowedTools }) {
+      const before = resolvedDisallow.length;
+      const merged = new Set(resolvedDisallow);
+      for (const t of disallowedTools || []) {
+        if (typeof t === "string" && t) merged.add(t);
+      }
+      resolvedDisallow = [...merged];
+      // The harness reads this when it builds options, which happens at the
+      // start of a turn — so a push mid-session takes effect on the next turn,
+      // not the one in flight.
+      return { disallowedTools: resolvedDisallow.length, added: resolvedDisallow.length - before };
     },
   };
 }
