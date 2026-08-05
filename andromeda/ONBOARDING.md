@@ -144,6 +144,39 @@ Run `andromeda` with no arguments any time to see the live list.
 
 ---
 
+## Make your own agent
+
+An agent is a short YAML spec: a system prompt, a model, and what it's allowed
+to do. You don't need a checkout of anything — start from an agent that already
+runs on your platform:
+
+```bash
+andromeda agent get starter > my-agent.yaml    # a real, working spec
+```
+
+Open it and change two things: `name:` (pick your own — reusing a name creates a
+new **version** of that agent instead) and `systemPrompt:` (what your agent is
+for). The file is commented throughout; leave the rest alone the first time.
+
+```bash
+andromeda agent create -f my-agent.yaml
+andromeda agent ls                             # wait for phase: Ready
+andromeda --agent my-agent
+```
+
+The first `create` bakes a snapshot, so `Ready` takes a few seconds. Copying
+`starter` rather than writing from scratch matters for one non-obvious reason:
+the spec pins the brain **image digest**, which differs per platform. The one
+you just fetched is already correct for yours.
+
+Editing a live agent is the same command — `agent create` with an existing
+`name:` adds a version. Sessions already running stay on the version they
+started with, so nobody's mind breaks under them; new sessions get the new one.
+`agent get <name> --version N` fetches any earlier version, and `agent rm <name>`
+deletes one (it refuses, and lists them, if live sessions would die with it).
+
+---
+
 ## What's actually happening (the good part)
 
 - **Durable mind** — the agent's memory lives in a checkpointed process that

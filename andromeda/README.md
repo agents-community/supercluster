@@ -10,6 +10,16 @@ npx @agentsupercluster/andromeda --session sess-…     # come back tomorrow —
 npx @agentsupercluster/andromeda                      # see what agents/sessions exist
 ```
 
+Making your own agent needs no checkout either — copy one that already runs on
+your platform, edit its name and prompt, and apply it:
+
+```bash
+andromeda agent get starter > my-agent.yaml   # a real, working spec
+andromeda agent create -f my-agent.yaml       # then: andromeda --agent my-agent
+```
+
+See [ONBOARDING.md](./ONBOARDING.md) for the guided version.
+
 ## Connecting
 
 andromeda talks only to the AgentPlane control-plane API — a URL and a token

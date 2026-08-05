@@ -35,6 +35,10 @@ export class Client {
       const msg = data?.error?.message || data?.error || `HTTP ${res.status}`;
       const err = new Error(msg);
       err.status = res.status;
+      // Keep the decoded body: a 409 from agent delete carries the list of
+      // sessions that would be destroyed, and the caller cannot make an
+      // informed choice about --cascade from the message alone.
+      err.body = data;
       throw err;
     }
     return data;
@@ -65,6 +69,18 @@ export class Client {
     return d;
   }
   agents() { return this.json("GET", "/v1/agents").then((d) => d.agents ?? []); }
+  // 409s with the stranded session list unless cascade — deleting an agent
+  // deletes every version's template, and sessions pinned to an older version
+  // die with it. The confirmation belongs to the caller, so it is not implied.
+  deleteAgent(name, cascade) {
+    return this.json("DELETE", `/v1/agents/${encodeURIComponent(name)}${cascade ? "?cascade=true" : ""}`);
+  }
+  // Version history, newest first. Each entry carries the spec VERBATIM as it
+  // was applied — which is what lets `agent get` hand back a working starting
+  // point without the caller needing a checkout of the platform repo.
+  agentVersions(name) {
+    return this.json("GET", `/v1/agents/${encodeURIComponent(name)}/versions`).then((d) => d.versions ?? []);
+  }
   sessions() { return this.json("GET", "/v1/sessions").then((d) => d.sessions ?? []); }
   // apiKey (optional) is the user's BYO vendor key — sent once over TLS, held
   // only in the actor's memory for this session, never stored.

@@ -22,9 +22,19 @@ import { loadConfig, saveConfig, clearConfig, configPath } from "./config.mjs";
 const h = React.createElement;
 const fail = (msg) => { console.error(`andromeda: ${msg}`); process.exit(1); };
 
+// Accepts `--name value`, `--name=value`, and the single-dash short form
+// `-f value`. The short form matters: `agent create -f <spec.yaml>` is what
+// --help and the onboarding guide both tell you to type, and matching only
+// `--f` meant that exact command fell through to the usage error with no hint
+// that the flag was the problem.
 function arg(name) {
-  const i = process.argv.indexOf(`--${name}`);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+  for (const form of [`--${name}`, `-${name}`]) {
+    const i = process.argv.indexOf(form);
+    if (i >= 0) return process.argv[i + 1];
+    const eq = process.argv.find((a) => a.startsWith(`${form}=`));
+    if (eq !== undefined) return eq.slice(form.length + 1);
+  }
+  return undefined;
 }
 
 function prompt(q) {
@@ -134,7 +144,57 @@ async function runAgent(client) {
     console.log(`  watch it come up:  andromeda agent ls   (until phase is Ready)`);
     process.exit(0);
   }
-  fail("usage: andromeda agent create -f <spec.yaml> | ls");
+  // `agent get` exists so writing your own agent needs no repo checkout. Every
+  // version stores the spec verbatim, so an existing agent IS the example — and
+  // one from THIS platform, so its image digest is already right for the
+  // account. A digest copied out of a repo's examples/ is wrong everywhere but
+  // the account that built it, which is the failure this avoids.
+  if (sub === "get" || sub === "show") {
+    const name = process.argv[4];
+    if (!name || name.startsWith("-")) fail("usage: andromeda agent get <name> [--version N] > my-agent.yaml");
+    let versions;
+    try { versions = await client.agentVersions(name); } catch (e) { fail(`cannot read ${name}: ${e.message}`); }
+    if (!versions.length) fail(`agent "${name}" has no recorded versions`);
+    const want = arg("version");
+    // Don't trust list order for "latest" — pick the highest version number.
+    const pick = want
+      ? versions.find((v) => String(v.version) === String(want))
+      : versions.reduce((a, b) => (b.version > a.version ? b : a));
+    if (!pick) fail(`agent "${name}" has no version ${want} (have: ${versions.map((v) => v.version).join(", ")})`);
+    if (!pick.spec) fail(`version ${pick.version} of "${name}" predates spec capture — try a newer version`);
+    // Header on stderr, spec on stdout: `> my-agent.yaml` must capture valid
+    // YAML only, with nothing prepended that a later `agent create` would choke
+    // on. The guidance still reaches a human running it interactively.
+    process.stderr.write(`# ${name} v${pick.version}, created ${pick.created_at} by ${pick.created_by}\n`);
+    process.stderr.write(`# Edit "name:" before creating — reusing a name makes a new VERSION of that agent.\n`);
+    process.stdout.write(pick.spec.endsWith("\n") ? pick.spec : pick.spec + "\n");
+    process.exit(0);
+  }
+  // Without this, an agent created from the CLI could only be removed with a
+  // hand-rolled curl — so anyone experimenting accumulated dead agents.
+  if (sub === "rm" || sub === "delete") {
+    const name = process.argv[4];
+    if (!name || name.startsWith("-")) fail("usage: andromeda agent rm <name> [--cascade]");
+    const cascade = process.argv.includes("--cascade");
+    let r;
+    try {
+      r = await client.deleteAgent(name, cascade);
+    } catch (e) {
+      if (e.status === 409) {
+        // Name the sessions rather than just refusing: --cascade destroys minds,
+        // and the point of the 409 is that the caller sees what they would lose.
+        const live = e.body?.sessions ?? [];
+        console.error(`agent "${name}" still has ${live.length} live session(s):`);
+        for (const s of live) console.error(`  ${s}`);
+        fail(`re-run with --cascade to delete the agent AND these sessions`);
+      }
+      fail(`delete failed: ${e.message}`);
+    }
+    const gone = r.sessions_removed ?? [];
+    console.log(`agent "${name}" deleted${gone.length ? ` (${gone.length} session(s) removed)` : ""}`);
+    process.exit(0);
+  }
+  fail("usage: andromeda agent create -f <spec.yaml> | get <name> | rm <name> | ls");
 }
 
 // ---- sessions: list, optionally filtered by --agent -----------------------
@@ -186,7 +246,10 @@ usage:
   andromeda --session <sess-…>   re-attach to an existing mind
   andromeda                      list agents & sessions, then pick
   andromeda sessions [--agent X] list sessions (optionally for one agent)
-  andromeda agent create -f f.yaml | agent ls
+  andromeda agent ls             list agents and the version each is serving
+  andromeda agent get starter    print an agent's spec (start your own from it)
+  andromeda agent create -f f.yaml   create or re-version an agent from a spec
+  andromeda agent rm <name>      delete an agent (--cascade if it has sessions)
   andromeda cred set gh-token    store a git PAT (or: cred ls | cred rm <name>)
   andromeda logout | whoami
 
