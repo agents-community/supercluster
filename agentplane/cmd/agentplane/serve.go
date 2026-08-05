@@ -1051,6 +1051,18 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if st, err := s.actorStatus(r.Context(), brain); err == nil && st != "STATUS_RUNNING" {
 		waitHandReady(r.Context(), s.sc, sid, handReadyTimeout)
 	}
+	// Apply tool policy resolved at session create (#58). Here rather than at
+	// create because the brain wakes on the first message — pushing earlier
+	// reliably 504s. It must land BEFORE the message is relayed: the harness
+	// reads its options when it starts.
+	if deny := takeFederatedDeny(sid); len(deny) > 0 {
+		if err := pushBrainOptions(r.Context(), s.sc, sid, deny); err != nil {
+			// The brain keeps the spec's own policy, so this is a restriction we
+			// failed to add rather than an opening — but say so loudly.
+			s.log.Warn("session runs WITHOUT federated tool restrictions",
+				"session", sid, "count", len(deny), "err", err)
+		}
+	}
 	for attempt := 1; attempt <= 4; attempt++ {
 		req := s.brainReq(r.Context(), http.MethodPost, brain,
 			"/v1/sessions/"+brain+"/events", strings.NewReader(string(body)))

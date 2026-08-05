@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -507,13 +508,12 @@ func createSession(ctx context.Context, sc sessionCtx, agent, user string, v *va
 		// spec's tool policy into them and push it to the brain (#58). Must
 		// precede the first message: the harness reads its options when it
 		// starts, and the brain lists tools when it connects.
+		// Stash rather than push: the brain is not reachable yet at create — it
+		// wakes on the first message — so pushing here reliably 504s. The send
+		// path applies it, where the brain is already being woken.
 		if deny := resolveFederatedDeny(templateAllow(ctx, sc, agent), federated); len(deny) > 0 {
-			if err := pushBrainOptions(ctx, sc, sid, deny); err != nil {
-				// The brain keeps the spec's policy, so this is a restriction we
-				// failed to add — loud, because it is a silent widening otherwise.
-				log.Printf("WARN: session %s runs WITHOUT %d federated tool restriction(s): %v",
-					sid, len(deny), err)
-			}
+			rememberFederatedDeny(sid, deny)
+			log.Printf("session %s: %d federated tool(s) will be denied on first turn", sid, len(deny))
 		}
 	}
 	return sid, nil
@@ -737,6 +737,28 @@ func resolveHeaders(ctx context.Context, v *vault, user, srvName string, srv mcp
 			srvName, header, ref.Credential, user, len(p.Value))
 	}
 	return out
+}
+
+// pendingDeny holds resolved tool policy between session create (where the
+// upstream tool names become known) and the first send (where the brain is
+// awake enough to receive it).
+//
+// In memory on purpose: it is a cache of something recomputable, and a serve
+// restart between the two loses only an unsent restriction — which the send
+// path logs. Persisting it would mean a second store for data with a lifetime
+// of seconds.
+var pendingDeny sync.Map // sid -> []string
+
+func rememberFederatedDeny(sid string, deny []string) { pendingDeny.Store(sid, deny) }
+
+// takeFederatedDeny returns and clears the pending policy for a session.
+func takeFederatedDeny(sid string) []string {
+	v, ok := pendingDeny.LoadAndDelete(sid)
+	if !ok {
+		return nil
+	}
+	d, _ := v.([]string)
+	return d
 }
 
 // resolveFederatedDeny turns spec-level tool policy into the runtime tool names
