@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -47,6 +48,19 @@ func runDispatcher(args []string) {
 		}
 		time.Sleep(*interval)
 	}
+}
+
+// A session with no last_event_at has never emitted anything, so there is no
+// activity clock to read. Remember when this process first saw it idle and
+// measure from there; the entry is dropped once it suspends, so this cannot
+// grow without bound. In memory on purpose: losing it on restart costs one
+// extra idle window, which is the safe direction.
+var firstSeen sync.Map // sid -> time.Time
+
+func firstSeenIdle(sid string) time.Time {
+	v, _ := firstSeen.LoadOrStore(sid, time.Now())
+	t, _ := v.(time.Time)
+	return t
 }
 
 func dispatcherPass(sc sessionCtx, idleAfter time.Duration) {
@@ -110,11 +124,21 @@ func dispatcherPass(sc sessionCtx, idleAfter time.Duration) {
 		case h.Busy || h.Queued > 0:
 			// active — leave it alone (turn-boundary rule)
 		default:
-			idleFor := idleAfter // unknown last activity → conservative: treat as just-idle
+			idleFor := time.Duration(0)
 			if t, err := time.Parse(time.RFC3339Nano, h.LastEventAt); err == nil {
 				idleFor = time.Since(t)
 			} else {
-				continue // old image without last_event_at: skip rather than guess
+				// No last_event_at. This is NOT an old image — it is a session
+				// that was created and never messaged, so the brain has emitted
+				// nothing (`events: 0`). Skipping it, as this used to, meant such
+				// a session pinned a pool worker FOREVER: five of them exhausted
+				// the six-worker brain pool and blocked every new agent from
+				// baking its golden.
+				//
+				// Measured from first sight instead, so a session still has a
+				// full idle window between being created and being slept — the
+				// gap where a user is about to send their first message.
+				idleFor = time.Since(firstSeenIdle(sid))
 			}
 			if idleFor >= idleAfter {
 				// This is the path most sessions actually take: nobody deletes
@@ -126,6 +150,7 @@ func dispatcherPass(sc sessionCtx, idleAfter time.Duration) {
 				}
 				escrowTranscript(sc, sid, name)
 				suspend(sid, name)
+				firstSeen.Delete(sid)
 				if hand, ok := runningHands[sid]; ok {
 					suspend(sid, hand)
 					delete(runningHands, sid)
