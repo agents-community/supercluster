@@ -19,7 +19,12 @@ ARG PI_AGENT_VERSION=0.83.0
 RUN npm install "@earendil-works/pi-coding-agent@${PI_AGENT_VERSION}" \
   && npm cache clean --force
 
-COPY server.mjs runtime.mjs identity.mjs /app/
+# Every file runtime.mjs or a harness imports must be listed here. A missing
+# one fails at ACTOR START, not at build: node resolves imports lazily and
+# `docker build` is perfectly happy. approval.mjs was added and not copied,
+# and otel.mjs was already missing from the pi/codex images — invisible only
+# because those had not been rebuilt since it landed.
+COPY server.mjs runtime.mjs identity.mjs otel.mjs approval.mjs /app/
 COPY harness /app/harness
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
