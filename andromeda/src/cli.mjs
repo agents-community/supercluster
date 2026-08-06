@@ -197,6 +197,36 @@ async function runAgent(client) {
   fail("usage: andromeda agent create -f <spec.yaml> | get <name> | rm <name> | ls");
 }
 
+// ---- admin: the whole fleet, brains and hands ----------------------------
+async function runAdmin(client) {
+  const sub = process.argv[3];
+  if (sub !== "actors" && sub !== "ls") fail("usage: andromeda admin actors [--probe] [--owner X] [--agent Y] [--status Z]");
+  let actors;
+  try {
+    actors = await client.adminActors(process.argv.includes("--probe"));
+  } catch (e) {
+    // The route 404s for non-admins on purpose, so say what that means rather
+    // than leaving someone staring at "not found".
+    if (e.status === 404) fail("not an admin on this cluster (ask your host to add you to AGENTPLANE_ADMIN_EMAILS)");
+    fail(`admin: ${e.message}`);
+  }
+  for (const f of ["owner", "agent", "status"]) {
+    const want = arg(f);
+    if (want) actors = actors.filter((a) => String(a[f] ?? "") === want);
+  }
+  if (!actors.length) { console.log("(no actors)"); process.exit(0); }
+  for (const a of actors) {
+    // Flag an unpaired brain: it answers normally but every tool call fails,
+    // which is the failure this view exists to make visible.
+    const warn = a.role === "brain" && !a.paired ? "  ⚠ no hand" : "";
+    console.log(
+      `${a.actor.padEnd(20)} ${a.role.padEnd(6)} ${(a.agent + (a.version ? " v" + a.version : "")).padEnd(16)} ` +
+      `${a.status.padEnd(12)} ${a.owner || "-"}${warn}`);
+  }
+  console.log(`\n${actors.length} actor(s)`);
+  process.exit(0);
+}
+
 // ---- sessions: list, optionally filtered by --agent -----------------------
 async function runSessions(client) {
   const filter = arg("agent");
@@ -250,6 +280,7 @@ usage:
   andromeda agent get starter    print an agent's spec (start your own from it)
   andromeda agent create -f f.yaml   create or re-version an agent from a spec
   andromeda agent rm <name>      delete an agent (--cascade if it has sessions)
+  andromeda admin actors         every brain and hand in the cluster (admins only)
   andromeda cred set gh-token    store a git PAT (or: cred ls | cred rm <name>)
   andromeda logout | whoami
 
@@ -281,6 +312,7 @@ if (!token) {
 // Authenticated subcommands (need the client).
 if (positional === "cred") await runCred(client);
 if (positional === "agent") await runAgent(client);
+if (positional === "admin") await runAdmin(client);
 if (positional === "sessions") await runSessions(client);
 
 let sessionId = arg("session");

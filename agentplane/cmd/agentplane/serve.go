@@ -130,6 +130,7 @@ type server struct {
 	vault    *vault                  // credential vault (Secret Manager); nil when unconfigured
 	grantKey []byte                  // HMAC key for stateless hand-pull grants (= HAND_ADMIN_TOKEN)
 	emails   *emailAllowlist         // self-service /v1/access: emails allowed to self-issue a token
+	admins   *adminAllowlist         // who may see the cross-user fleet view (#70)
 	owners   sessionStore            // session ownership + durable metadata (F1, #36)
 	agents   *fsStore                // agent versioning (#32); nil without Firestore
 	limiter  *accessLimiter          // throttles unauthenticated /v1/access (F7)
@@ -146,13 +147,16 @@ func runServe(args []string) {
 
 	tokens := newTokenStore()
 	emails := newEmailAllowlist()
-	// Hot-reload the token set and the email allowlist (mounted Secret/ConfigMap
+	admins := newAdminAllowlist()
+	// Hot-reload the token set and both allowlists (mounted Secret/ConfigMap
 	// files refresh ~every 60s), so issue/revoke and allowlist edits take effect
-	// without a restart.
+	// without a restart. The admin list is in here for the same reason: granting
+	// an operator the fleet view should not require a redeploy.
 	go func() {
 		for range time.Tick(15 * time.Second) {
 			tokens.reload()
 			emails.reload()
+			admins.reload()
 		}
 	}()
 
@@ -176,6 +180,7 @@ func runServe(args []string) {
 		vault:    v,
 		grantKey: grantSigningKey(),
 		emails:   emails,
+		admins:   admins,
 		owners: newSessionStore(context.Background(),
 			env("AGENTPLANE_PROJECT", os.Getenv("GOOGLE_CLOUD_PROJECT")),
 			env("BRAIN_TEMPLATE_NS", "agentplane"), logger),
@@ -217,6 +222,7 @@ func runServe(args []string) {
 	mux.HandleFunc("GET /v1/sessions/{id}", s.auth(s.handleSessionGet))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.auth(s.handleSessionDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/suspend", s.auth(s.handleSessionSuspend))
+	mux.HandleFunc("GET /v1/admin/actors", s.auth(s.handleAdminActors))
 	mux.HandleFunc("GET /v1/sessions/{id}/approvals", s.auth(s.handleApprovalList))
 	mux.HandleFunc("POST /v1/sessions/{id}/approvals/{req}", s.auth(s.handleApprovalDecide))
 	mux.HandleFunc("PUT /v1/sessions/{id}/key", s.auth(s.handleSessionKey))

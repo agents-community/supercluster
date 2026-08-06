@@ -57,6 +57,10 @@ spec:
         # Self-service access: emails allowed to self-issue a token via
         # POST /v1/access, from a mounted ConfigMap (hot-reloaded).
         - { name: AGENTPLANE_ALLOWED_EMAILS_FILE, value: "/etc/agentplane-access/emails" }
+        # Who may see the cross-user fleet view (#70). Same ConfigMap, separate
+        # key: being allowed to USE the platform is not being allowed to see
+        # everyone else's sessions. Empty grants nobody.
+        - { name: AGENTPLANE_ADMIN_EMAILS_FILE, value: "/etc/agentplane-access/admins" }
         # Escrow (optional — needs Workload Identity on the ServiceAccount):
         # Real value, not a placeholder: an empty default here silently reverts
         # whatever `kubectl set env` had configured on every apply, and the

@@ -11,6 +11,14 @@ metadata:
   name: agentplane-allowed-emails
   namespace: agentplane
 data:
+  # Who may see the cross-user fleet view: GET /v1/admin/actors, which lists
+  # every brain and hand and the owner of each. Being allowed to USE the
+  # platform (`emails` below) is deliberately not the same as being allowed to
+  # see everyone else's sessions, so this is a separate key.
+  #
+  # Empty grants NOBODY — a missing list must never read as "everyone".
+  admins: |
+    dharamendra.kumar@outlook.com
   emails: |
     dharamendra.kumar@outlook.com
     divyatanwar26@gmail.com
