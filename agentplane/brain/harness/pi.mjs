@@ -14,7 +14,7 @@
 // runtime's watchdog signal maps to a REAL interrupt (like claude-code, unlike
 // codex's passive between-events check).
 
-import { approvalRequestId, needsApproval } from "../approval.mjs";
+import { approvalRequestId } from "../approval.mjs";
 import { handURL } from "../identity.mjs";
 
 // Translate our AgentSpec tool names (claude-style) to pi's built-ins.
@@ -121,6 +121,7 @@ async function handToolDefinitions(ctx) {
 
   const allow = handNames(ctx.spec.allow);
   const deny = handNames(ctx.spec.deny);
+  const askHand = handNames(ctx.askList);
   const defs = [];
   for (const t of tools) {
     if (allow.length && !allow.includes(t.name)) continue;
@@ -140,8 +141,11 @@ async function handToolDefinitions(ctx) {
         };
       },
     };
-    // `ask` is matched against the tool name the model actually sees.
-    defs.push(needsApproval(t.name, ctx.askList)
+    // `ask` must be TRANSLATED like allow/deny, not matched raw. A spec says
+    // `ask: [Bash]` (claude vocabulary) while the hand's tool is `bash`, and
+    // needsApproval compares exactly — so the untranslated form matched
+    // nothing and the gate silently failed OPEN, letting bash run unapproved.
+    defs.push(askHand.includes(t.name)
       ? gateToolDefinition(def, ctx, t.name, approvalRequestId)
       : def);
   }
@@ -208,8 +212,12 @@ export const pi = {
       const bridged = await handToolDefinitions(ctx);
       if (bridged && bridged.defs.length) {
         handClient = bridged.client;
-        toolOpts = { ...base, noTools: "all", tools: undefined, excludeTools: undefined,
-                     customTools: bridged.defs };
+        // `tools` is the allowlist, and customTools supplies the definitions
+        // for those names. NOT noTools:"all" — that suppressed the custom
+        // tools as well, so pi ran with none and the model answered by
+        // printing the command it would have run in a markdown block.
+        toolOpts = { ...base, tools: bridged.defs.map((d) => d.name),
+                     excludeTools: undefined, customTools: bridged.defs };
         console.log(`pi: ${bridged.defs.length} tool(s) via the hand`);
       } else if (bridged) {
         console.error("pi: the hand exposed no tools matching allow/deny — running tool-less");
