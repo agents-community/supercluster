@@ -89,7 +89,7 @@ andromeda --agent reviewer
 
 ### The tools you can name
 
-These are Claude Code's built-in tools; use these exact names in `allow` / `deny`.
+Use these exact names in `allow` / `deny`:
 
 | Tool | Does |
 |---|---|
@@ -97,14 +97,14 @@ These are Claude Code's built-in tools; use these exact names in `allow` / `deny
 | `Read` · `Write` · `Edit` | read and change files |
 | `Glob` · `Grep` | find files by name · search their contents |
 | `NotebookEdit` | edit Jupyter cells |
-| `WebFetch` | fetch a URL |
-| `WebSearch` | search the web |
+| `WebFetch` · `WebSearch` | fetch a URL · search the web |
 | `TodoWrite` | keep a task list across a long job |
-| `Agent` | spawn a subagent (see the caveat below) |
+| `Agent` | spawn a subagent |
 
-MCP tools are named `mcp__<server>__<tool>`. **With `hand: true` they arrive
-through the hand instead**, as `mcp__hand__<server>__<tool>` — so
-`allow: [mcp__github__*]` matches nothing. Scope them with `server/tool`:
+`allow` lets a tool run; `deny` removes it; anything you list in neither will not
+run. So list what your agent needs. The hand's own tools are on automatically.
+
+To add an MCP server, declare it and scope its tools with `server/tool`:
 
 ```yaml
 mcp:
@@ -116,58 +116,11 @@ mcp:
 allow: [github/list_issues]       # this one is permitted; github's others are not
 ```
 
-Naming any tool of a server turns that server into an allow-list. A `server/tool`
-entry that matches nothing **fails session creation** rather than silently
-permitting everything — that mistake used to look like a working restriction.
+Naming any tool of a server turns that server into an allow-list. `github/*`
+takes the whole server.
 
-### What `allow` and `deny` actually do — and the third option that doesn't exist
-
-There are **two** outcomes for any tool, not three:
-
-| You write | Outcome |
-|---|---|
-| `allow: [X]` | X runs, without asking |
-| `deny: [X]` | X is removed outright |
-| neither | X does not run |
-
-- `deny` removes a tool. Use it for the reasoning layer's own `Bash`/`Write`/
-  `Edit` when `hand: true` — that split is the point.
-- `allow` auto-approves. The hand's own tools (`mcp__hand__*`) are allowed for
-  you automatically.
-- **Unlisted is effectively denied.** Sessions are headless, so an unlisted tool
-  has no route to approval.
-
-> **There is no "ask me first" mode today.** A durable mind runs unattended —
-> that is the whole point of detaching — so there is nobody at the terminal when
-> a tool fires. Sessions run with the permission prompt disabled, and no
-> approval request is ever sent to andromeda. Decide the policy in the spec, up
-> front. If you want a human in the loop, keep the risky tool out of `allow` and
-> have the agent tell you what it would do.
-
-The safety boundary is the **gVisor sandbox**, not these lists.
-
-> **Subagents (`Agent`) are not a boundary.** A subagent does not reliably
-> inherit `deny` — an escrowed transcript shows `Bash` running under an agent
-> that denied it. Do not treat per-subagent tool policy as enforced.
-
-### What web tools can and cannot do here
-
-Worth knowing before you allow them:
-
-- **`WebSearch` is run by the model provider**, not by your agent — results come
-  back in the response. If your provider or region does not offer it, allowing
-  it changes nothing.
-- **`WebFetch` runs in the reasoning layer, not on the hand.** It is the one
-  exception to "the mind decides, the hand executes" — fetched page content
-  lands directly in the model's context without passing through the sandbox
-  that runs your commands.
-- **`egress.allowedHosts` does not constrain it yet.** That field is declarative
-  today; the enforcing gateway is not deployed. Actors can reach any public
-  address, so allowing `WebFetch` means unrestricted outbound fetching, not
-  fetching limited to the hosts you listed.
-
-If you want the agent reading the web *and* want that traffic constrained, have
-it clone and read a repo through the git proxy instead — that path is enforced.
+Full reference, including how each field maps onto the harness:
+[`agentplane/docs/agents.md`](../agentplane/docs/agents.md).
 
 ---
 
@@ -189,10 +142,6 @@ command; anything starting with `/` goes to the terminal, never to the agent.
 | **/usage** | tokens & cost this session |
 | **/help** | list all commands |
 | **/quit** | detach — the mind keeps its full memory; re-attach any time |
-
-There are no other key bindings. `esc` and `ctrl+s` used to detach and suspend
-and were removed: a stray keypress mid-turn made a working agent look like it
-had stopped.
 
 When you detach, Andromeda prints the exact command to come back to that mind.
 
@@ -304,8 +253,8 @@ andromeda agent rm reviewer                          # refuses if live sessions 
 | agent replies but does nothing useful | make sure your model key env var is `export`ed (a plain `VAR=…` won't reach the process) |
 | first message is slow | that's a sleeping mind waking from its checkpoint — it's quick after that |
 | `node: bad option` / crashes | you need Node 18.17+ (`node -v` to check) |
-| `allows tools that no connected MCP server exposes` at session start | a `server/tool` entry in `allow` is misspelled — the error names the servers that did connect |
-| a tool you expected never runs | it isn't in `allow`. There is no approval prompt; unlisted means it won't run |
+| `allows tools that no connected MCP server exposes` | a `server/tool` entry in `allow` is misspelled — the error names the servers that did connect |
+| a tool you expected never runs | add it to `allow` — unlisted tools don't run |
 | `sh: 1: andromeda: not found` from `npx` | you're inside a checkout of andromeda itself. Run it from any other directory, or `npm install -g` |
 
 ---

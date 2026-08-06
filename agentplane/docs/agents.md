@@ -53,6 +53,30 @@ entire control. Only allow-listed tools are auto-approved; headless, anything
 else is denied at the permission layer, so an empty `allow` means a chat-only
 agent. The safety boundary is the gVisor sandbox, not tool lists.
 
+**There is no interactive approval.** A tool runs or it does not; nothing is
+queued for a human. `permissionMode: "dontAsk"` is set unconditionally, the
+harness is given no `canUseTool` callback, and no approval event type exists on
+the session stream — so there is no channel on which a request could reach a
+client even if one were raised. Policy is decided in the spec, before the
+session starts. See [approval flow](#approval-flow-not-built) for what building
+it would take.
+
+### `WebFetch` and `WebSearch` are not sandboxed by the hand
+
+Both are reasoning-layer tools, so they are the exception to "the mind decides,
+the hand executes":
+
+| Tool | Runs | Consequence |
+|---|---|---|
+| `WebSearch` | at the model provider | results arrive in the response; if the provider or region does not offer it, allowing it does nothing |
+| `WebFetch` | in the brain actor | fetched content enters the model's context without crossing the sandbox that runs commands |
+
+`egress.allowedHosts` does **not** constrain either one today — the field is
+declarative and the enforcing gateway is not deployed (threat model F9). Actors
+egress to `0.0.0.0/0` minus RFC1918 and the metadata server, so allowing
+`WebFetch` grants unrestricted outbound fetching rather than fetching limited to
+the listed hosts. The git proxy is the one enforced network path.
+
 ### How the spec reaches the harness
 
 The AgentSpec is vendor-neutral; each in-image adapter translates it. For
