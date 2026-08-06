@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -33,5 +34,27 @@ func TestAdminConsoleServesSelfContainedPage(t *testing.T) {
 	}
 	if w.Header().Get("Cache-Control") != "no-store" {
 		t.Error("console must not be cached against a newer binary")
+	}
+}
+
+// The ingress routes `/` to the public port, so a route on the main mux is on
+// the internet. This asserts the admin surface is not registered there —
+// a one-line mistake would silently publish every user's session list.
+func TestAdminRoutesAreNotOnThePublicMux(t *testing.T) {
+	src, err := os.ReadFile("serve.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{`mux.HandleFunc("GET /admin"`, `mux.HandleFunc("GET /v1/admin/actors"`} {
+		// adminMux.HandleFunc(...) is the intended form; plain mux.HandleFunc is not.
+		for _, line := range strings.Split(string(src), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, route) {
+				t.Errorf("admin route registered on the PUBLIC mux: %s", trimmed)
+			}
+		}
+	}
+	if !strings.Contains(string(src), `adminMux.HandleFunc("GET /admin"`) {
+		t.Error("the console is not registered on the admin mux either — it would 404 everywhere")
 	}
 }
