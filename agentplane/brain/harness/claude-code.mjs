@@ -6,11 +6,44 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { handURL } from "../identity.mjs";
+import { createHash } from "node:crypto";
 
 function textFromContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.filter((b) => b.type === "text").map((b) => b.text).join("");
+}
+
+// Does this tool need a human yes? Entries are matched two ways so the `ask`
+// list uses the same vocabulary as `allow`/`deny`: a bare tool name (`Bash`),
+// or a federated `server/tool` pair, which reaches the model as
+// `mcp__hand__<server>__<tool>` when the agent has a hand.
+export function needsApproval(tool, askList) {
+  if (!Array.isArray(askList) || askList.length === 0) return false;
+  for (const entry of askList) {
+    if (typeof entry !== "string" || !entry) continue;
+    if (entry === tool) return true;
+    const [server, name] = entry.split("/");
+    if (!server || !name) continue;
+    if (name === "*") {
+      if (tool.startsWith(`mcp__hand__${server}__`) || tool.startsWith(`mcp__${server}__`)) return true;
+      continue;
+    }
+    if (tool === `mcp__hand__${server}__${name}` || tool === `mcp__${server}__${name}`) return true;
+  }
+  return false;
+}
+
+// A stable id for "this exact call". Derived from the tool AND its input, so
+// approving `rm -rf build` does not also approve `rm -rf /` — the human is
+// deciding about the call they were shown, not about the tool in general.
+//
+// Hashed rather than sent raw because the id travels in URLs; the readable
+// tool name and input ride alongside it in the event.
+export function approvalRequestId(tool, input) {
+  let body;
+  try { body = JSON.stringify(input ?? {}); } catch { body = String(input); }
+  return "apr_" + createHash("sha256").update(`${tool}\u0000${body}`).digest("hex").slice(0, 16);
 }
 
 // Adapt the runtime's {text} inputs into the shape the SDK's prompt expects.
@@ -65,6 +98,54 @@ export const claudeCode = {
     if (resumeId) opts.resume = resumeId;
     return opts;
   },
+  // Gate the tools an agent's `ask:` list names behind a human decision (#67).
+  //
+  // PreToolUse rather than canUseTool, for two reasons that both matter:
+  //
+  //   * canUseTool would have to AWAIT the human, holding the turn open. The
+  //     watchdog then fires at turnDeadlineSeconds, aborts and restarts the
+  //     harness — so an unanswered approval would not merely time out, it would
+  //     destroy the turn and replay the user's message.
+  //   * Under `permissionMode: "dontAsk"` the SDK denies anything not
+  //     pre-approved as a short-circuit, and documents that PreToolUse denies
+  //     bypass canUseTool. PreToolUse is the hook that reliably runs here.
+  //
+  // Denying returns immediately, so the model reads the reason, reports what it
+  // wanted to do, and the turn ENDS. The actor suspends; waiting costs nothing.
+  approvalHook(ctx) {
+    return async (input) => {
+      const tool = input?.tool_name;
+      if (!tool || !needsApproval(tool, ctx.askList)) return { continue: true };
+
+      const req = approvalRequestId(tool, input.tool_input);
+      if (ctx.approvalState(req) === "granted") {
+        // Spend it BEFORE running: one-shot, so an identical call later asks
+        // again rather than riding on a decision the human already spent.
+        ctx.useApproval(req);
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "allow",
+            permissionDecisionReason: `human approved ${req}`,
+          },
+        };
+      }
+
+      ctx.requestApproval(req, tool, input.tool_input);
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `This call needs human approval (request ${req}) and is not approved yet. ` +
+            `The request has been raised — do NOT retry it this turn. Finish by telling ` +
+            `the human exactly what you were about to do and why, then stop.`,
+        },
+      };
+    };
+  },
 
   async *run(inputs, ctx) {
     // BYO-key: the SDK reads ANTHROPIC_API_KEY from the environment. Setting it
@@ -72,6 +153,11 @@ export const claudeCode = {
     // absent, the image's shared env key stays in effect.
     if (ctx.apiKey) process.env.ANTHROPIC_API_KEY = ctx.apiKey;
     const options = this.optionsFromSpec(ctx.spec, ctx.sessionId, ctx.workdir, ctx.resolvedDisallow);
+    // Registered here rather than in optionsFromSpec so that stays pure and
+    // unit-testable: the hook closes over the live runtime ctx.
+    if (Array.isArray(ctx.askList) && ctx.askList.length) {
+      options.hooks = { ...(options.hooks || {}), PreToolUse: [{ hooks: [this.approvalHook(ctx)] }] };
+    }
     const q = query({ prompt: asUserMessages(inputs), options });
     // The watchdog's lever: interrupting the live SDK query tears down a wedged
     // in-flight turn (finding #1). The runtime aborts the signal on deadline.

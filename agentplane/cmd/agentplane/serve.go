@@ -217,6 +217,8 @@ func runServe(args []string) {
 	mux.HandleFunc("GET /v1/sessions/{id}", s.auth(s.handleSessionGet))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.auth(s.handleSessionDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/suspend", s.auth(s.handleSessionSuspend))
+	mux.HandleFunc("GET /v1/sessions/{id}/approvals", s.auth(s.handleApprovalList))
+	mux.HandleFunc("POST /v1/sessions/{id}/approvals/{req}", s.auth(s.handleApprovalDecide))
 	mux.HandleFunc("PUT /v1/sessions/{id}/key", s.auth(s.handleSessionKey))
 	// Credential vault (client-facing; value is write-only).
 	mux.HandleFunc("PUT /v1/credentials/{name}", s.auth(s.handleCredPut))

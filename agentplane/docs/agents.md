@@ -48,18 +48,44 @@ Other providers: set `apiKeySecret` explicitly (pi itself supports many more).
 
 ## Tool policy is yours
 
-The platform imposes **no** tool policy — `allow`/`deny` in the spec is the
-entire control. Only allow-listed tools are auto-approved; headless, anything
+The platform imposes **no** tool policy — `allow`/`deny`/`ask` in the spec is
+the entire control. Only allow-listed tools are auto-approved; headless, anything
 else is denied at the permission layer, so an empty `allow` means a chat-only
 agent. The safety boundary is the gVisor sandbox, not tool lists.
 
-**There is no interactive approval.** A tool runs or it does not; nothing is
-queued for a human. `permissionMode: "dontAsk"` is set unconditionally, the
-harness is given no `canUseTool` callback, and no approval event type exists on
-the session stream — so there is no channel on which a request could reach a
-client even if one were raised. Policy is decided in the spec, before the
-session starts. See [approval flow](#approval-flow-not-built) for what building
-it would take.
+### `ask:` — tools that need a human yes (#67)
+
+```yaml
+allow: [WebFetch]
+ask:   [Bash, github/create_issue]   # same vocabulary as allow/deny
+deny:  [Write, Edit]
+```
+
+`ask` **gates** a tool; it does not grant one. A gated call is denied with a
+reason the model reads, a `tool.approval_requested` event is emitted, and the
+turn **ends cleanly** — the actor suspends, and waiting costs nothing.
+
+```
+andromeda    →  /approvals, then /approve <id> or /deny <id>
+```
+
+Approving queues an input, so the agent retries the call it was blocked on
+rather than sitting idle until you happen to send a message.
+
+Three properties worth knowing:
+
+- **Per call, not per tool.** The request id hashes the tool *and its input*, so
+  approving `rm -rf build` does not approve `rm -rf /`.
+- **Single use.** A grant is spent when the tool runs, and the spend is
+  recorded, so a restart cannot resurrect it.
+- **Durable.** Requests and answers are events, so they survive suspend, harness
+  restart and a cold rebuild — the runtime folds the log at startup.
+
+Implemented as a `PreToolUse` hook rather than `canUseTool`. Awaiting a human
+inside `canUseTool` would hold the turn open until the watchdog killed it, and
+under `permissionMode: "dontAsk"` the SDK short-circuits denials — the SDK
+documents that PreToolUse denies bypass `canUseTool`, so it is the hook that
+reliably runs in a headless session.
 
 ### `WebFetch` and `WebSearch` are not sandboxed by the hand
 
