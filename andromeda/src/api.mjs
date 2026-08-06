@@ -68,11 +68,6 @@ export class Client {
     if (!res.ok) { const e = new Error(d?.error?.message || d?.error || `HTTP ${res.status}`); e.status = res.status; throw e; }
     return d;
   }
-  // Fleet view (#70) — every brain and hand, across users. 404s unless your
-  // email is on the admin allowlist.
-  adminActors(probe) {
-    return this.json("GET", `/v1/admin/actors${probe ? "?probe=true" : ""}`).then((d) => d.actors ?? []);
-  }
   agents() { return this.json("GET", "/v1/agents").then((d) => d.agents ?? []); }
   // 409s with the stranded session list unless cascade — deleting an agent
   // deletes every version's template, and sessions pinned to an older version
