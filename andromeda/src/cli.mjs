@@ -257,9 +257,9 @@ connection (flags > env > ~/.andromeda):
   --url <url>       or ANDROMEDA_URL    (default http://localhost:7433)
   --token <token>   or ANDROMEDA_TOKEN
 
-keys while chatting:
-  enter   send        ctrl+s  suspend the mind in place
-  esc     detach — the mind keeps its memory; re-attach any time`);
+while chatting:
+  enter   send a message
+  /sleep  suspend the mind in place · /quit  detach (it keeps its memory)`);
   process.exit(0);
 }
 

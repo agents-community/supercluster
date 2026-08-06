@@ -53,6 +53,30 @@ entire control. Only allow-listed tools are auto-approved; headless, anything
 else is denied at the permission layer, so an empty `allow` means a chat-only
 agent. The safety boundary is the gVisor sandbox, not tool lists.
 
+**There is no interactive approval.** A tool runs or it does not; nothing is
+queued for a human. `permissionMode: "dontAsk"` is set unconditionally, the
+harness is given no `canUseTool` callback, and no approval event type exists on
+the session stream — so there is no channel on which a request could reach a
+client even if one were raised. Policy is decided in the spec, before the
+session starts. See [approval flow](#approval-flow-not-built) for what building
+it would take.
+
+### `WebFetch` and `WebSearch` are not sandboxed by the hand
+
+Both are reasoning-layer tools, so they are the exception to "the mind decides,
+the hand executes":
+
+| Tool | Runs | Consequence |
+|---|---|---|
+| `WebSearch` | at the model provider | results arrive in the response; if the provider or region does not offer it, allowing it does nothing |
+| `WebFetch` | in the brain actor | fetched content enters the model's context without crossing the sandbox that runs commands |
+
+`egress.allowedHosts` does **not** constrain either one today — the field is
+declarative and the enforcing gateway is not deployed (threat model F9). Actors
+egress to `0.0.0.0/0` minus RFC1918 and the metadata server, so allowing
+`WebFetch` grants unrestricted outbound fetching rather than fetching limited to
+the listed hosts. The git proxy is the one enforced network path.
+
 ### How the spec reaches the harness
 
 The AgentSpec is vendor-neutral; each in-image adapter translates it. For
@@ -114,8 +138,26 @@ So two things follow:
 - **`allow: [mcp__github__*]` matches nothing.** The hand's own entry
   (`mcp__hand__*`) is added to `allowedTools` automatically, which covers every
   federated tool too.
-- **You cannot allow-list federated tools individually today.** Restrict by
-  *which servers you connect*, not by which of their tools you permit.
+- **Scope federated tools with `server/tool`, not the runtime name.** The spec is
+  compiled before any upstream is dialled, so it cannot know that a `github`
+  server exposes `create_issue`. serve learns the real names at session setup and
+  translates them (#58):
+
+  ```yaml
+  allow: [github/list_issues]     # permitted; github's other tools are denied
+  allow: [github/*]               # the whole server
+  ```
+
+  Naming any tool of a server turns that server into an allow-list. A server
+  nobody names is untouched, so this is inert for specs that do not use it.
+  Resolution emits **denials only** — it can never grant a tool the operator
+  disabled.
+
+  An entry matching nothing **fails session creation**, naming the bad entries
+  and the servers that did connect. That case used to pass silently and fail
+  *open*: misspell the server (`gihub/list_issues`) and the real `github` was
+  never scoped, so all of its tools stayed permitted while the spec read as a
+  restriction.
 
 Without a hand (`hand: false`), your servers connect straight to the brain and
 the names are `mcp__github__*` — but then the reasoning layer holds the
