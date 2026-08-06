@@ -101,8 +101,19 @@ Use these exact names in `allow` / `deny`:
 | `TodoWrite` | keep a task list across a long job |
 | `Agent` | spawn a subagent |
 
-`allow` lets a tool run; `deny` removes it; anything you list in neither will not
-run. So list what your agent needs. The hand's own tools are on automatically.
+`allow` lets a tool run; `deny` removes it; `ask` runs it only after you say yes;
+anything in none of them will not run. So list what your agent needs. The hand's
+own tools are on automatically.
+
+```yaml
+allow: [WebFetch]
+ask:   [Bash]                     # you approve each call before it runs
+deny:  [Write, Edit]
+```
+
+A gated call stops the agent and shows up in your terminal. `/approve <id>` and
+it carries on from where it stopped — you can be away when it asks; the request
+is still waiting when you come back.
 
 To add an MCP server, declare it and scope its tools with `server/tool`:
 
@@ -138,6 +149,8 @@ command; anything starting with `/` goes to the terminal, never to the agent.
 | Command | Does |
 |-----|------|
 | **/sleep** | suspend the mind in place (frees resources; wakes on your next message) |
+| **/approvals** | tool calls waiting on your decision |
+| **/approve** `<id>` | let a waiting call run (`/deny <id>` refuses it) |
 | **/sessions** | list your sessions for this agent |
 | **/usage** | tokens & cost this session |
 | **/help** | list all commands |
