@@ -40,6 +40,46 @@ export function createRuntime({ workdir, spec, harness, identity }) {
     return ev;
   }
 
+  // Rebuild approval state (#67) by folding the event log, so a cold start —
+  // one where the actor was rebuilt rather than restored from a snapshot — does
+  // not silently forget that a human already said yes, or re-ask a question
+  // that was already answered.
+  //
+  // Ordering is the log's, so a later answer always wins over an earlier one:
+  // a request re-raised after a denial is open again, which is what a retry
+  // should mean.
+  function rebuildApprovals() {
+    if (!existsSync(EVENT_LOG)) return;
+    let lines;
+    try { lines = readFileSync(EVENT_LOG, "utf8").trim().split("\n"); }
+    catch { return; }
+    for (const line of lines) {
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      const req = ev.request;
+      if (!req) continue;
+      if (ev.type === "tool.approval_requested") { openRequests.add(req); continue; }
+      if (ev.type === "tool.approval_granted") { openRequests.delete(req); approvedRequests.add(req); continue; }
+      if (ev.type === "tool.approval_denied") { openRequests.delete(req); approvedRequests.delete(req); continue; }
+      // A grant is spent when the tool actually runs — replaying that keeps
+      // one-shot semantics across a restart instead of resurrecting the grant.
+      if (ev.type === "tool.approval_used") { approvedRequests.delete(req); }
+    }
+  }
+
+  // The tool input is what a human reads to decide, so it is kept rather than
+  // redacted — it goes to the same durable log that already holds the whole
+  // conversation, so this adds no exposure. It IS capped: a Write of a large
+  // file would otherwise put the entire body in the log and in every replay.
+  const APPROVAL_INPUT_CAP = 4000;
+  function summariseInput(input) {
+    let text;
+    try { text = JSON.stringify(input); } catch { return { unserialisable: true }; }
+    if (text === undefined) return {};
+    if (text.length <= APPROVAL_INPUT_CAP) return input;
+    return { truncated: true, bytes: text.length, preview: text.slice(0, APPROVAL_INPUT_CAP) };
+  }
+
   // Live-only fan-out: stream to current SSE viewers WITHOUT persisting to the
   // event log or replay buffer (for transient text deltas). No id, so it never
   // advances a client's cursor; the durable `agent.message` still lands via emit().
@@ -61,6 +101,45 @@ export function createRuntime({ workdir, spec, harness, identity }) {
   // from the spec so the merge direction is unambiguous: this only ever ADDS to
   // what the spec denies.
   let resolvedDisallow = [];
+  // Approvals granted by a human this session, keyed by request id (#67).
+  //
+  // In actor memory on purpose. Every grant is ALSO written to the event log as
+  // tool.approval_granted, so this set is a fold of durable state rather than a
+  // second source of truth — a snapshot carries it, and rebuildApprovals()
+  // replays it after a cold start.
+  //
+  // Grants are one-shot: consumed when the tool runs, so approving a call you
+  // read does not silently approve every later call that happens to match it.
+  const approvedRequests = new Set();
+  // Emitted and not yet answered. Without this, a model that retries the same
+  // call every turn emits a fresh request each time and the human sees a pile of
+  // duplicates for one decision.
+  const openRequests = new Set();
+  // Called here, not beside its definition: both sets are `const` and would be
+  // in the temporal dead zone earlier in the module body.
+  rebuildApprovals();
+
+  const askList = () => (Array.isArray(spec.ask) ? spec.ask : []);
+  function approvalState(req) {
+    if (approvedRequests.has(req)) return "granted";
+    if (openRequests.has(req)) return "open";
+    return "none";
+  }
+  // Spend a grant. One-shot, and RECORDED, so the fold agrees after a restart
+  // instead of replaying a grant that was already used.
+  function useApproval(req) {
+    approvedRequests.delete(req);
+    emit("tool.approval_used", { request: req });
+  }
+  // Raise a request unless one is already open for this exact call. Returns the
+  // id so a caller can hold on to it.
+  function requestApproval(req, tool, input) {
+    if (!openRequests.has(req)) {
+      openRequests.add(req);
+      emit("tool.approval_requested", { request: req, tool, input: summariseInput(input) });
+    }
+    return req;
+  }
   let turnStartedAt = 0;
   let delivered = [];        // pulled into the harness, no result yet (re-queue on teardown)
   let sessionId = existsSync(SESSION_ID_FILE) ? readFileSync(SESSION_ID_FILE, "utf8").trim() : null;
@@ -140,6 +219,10 @@ export function createRuntime({ workdir, spec, harness, identity }) {
         // Serve-resolved restrictions, read fresh each turn so a push mid-session
         // applies to the next one.
         get resolvedDisallow() { return resolvedDisallow; },
+        // Approval gate (#67). The harness's PreToolUse hook calls these; the
+        // runtime owns the state so it survives a harness restart.
+        get askList() { return askList(); },
+        approvalState, useApproval, requestApproval,
         get sessionId() { return sessionId; },
         setSessionId,
         get apiKey() { return apiKey; }, // BYO-key override, else null → env
@@ -250,6 +333,44 @@ export function createRuntime({ workdir, spec, harness, identity }) {
     // disabled no matter what serve sends — a control plane bug must not be able
     // to re-enable something an operator turned off. The reverse direction is
     // the whole point: serve can only take tools away.
+    // Answer an open approval request (#67). Returns what happened so the
+    // caller can 404 an unknown id instead of reporting a phantom success.
+    //
+    // Approving also QUEUES a nudge, because the model was told the tool was
+    // denied and has already finished its turn. Without an input the grant
+    // would sit unused until the human happened to send another message, and
+    // the agent would look like it ignored the approval.
+    resolveApproval(req, approve, note) {
+      if (!openRequests.has(req)) {
+        return { ok: false, reason: approvedRequests.has(req) ? "already granted" : "no such open request" };
+      }
+      openRequests.delete(req);
+      if (!approve) {
+        emit("tool.approval_denied", { request: req, ...(note ? { note } : {}) });
+        this.acceptUserMessage(`The human DENIED approval request ${req}.${note ? " Reason: " + note + "." : ""} Do not retry it; continue without that tool or say what you cannot do.`);
+        return { ok: true, decision: "denied" };
+      }
+      approvedRequests.add(req);
+      emit("tool.approval_granted", { request: req, ...(note ? { note } : {}) });
+      this.acceptUserMessage(`The human APPROVED approval request ${req}. Retry that exact tool call now — the approval is single-use.`);
+      return { ok: true, decision: "granted" };
+    },
+
+    // Exposed so the HTTP layer and tests use the same gate the hook does,
+    // rather than a parallel implementation that could drift from it.
+    approvalState, useApproval, requestApproval,
+
+    // Everything a human still owes a decision on. A fold over the log, not a
+    // second table that could disagree with it.
+    pendingApprovals() {
+      const out = new Map();
+      for (const ev of this.listEvents()) {
+        if (ev.type === "tool.approval_requested" && openRequests.has(ev.request)) {
+          out.set(ev.request, { request: ev.request, tool: ev.tool, input: ev.input, since: ev.time });
+        }
+      }
+      return [...out.values()];
+    },
     setResolvedOptions({ disallowedTools }) {
       const before = resolvedDisallow.length;
       const merged = new Set(resolvedDisallow);

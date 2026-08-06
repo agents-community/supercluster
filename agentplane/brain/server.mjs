@@ -89,6 +89,31 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ ok: true, ...applied }));
   }
 
+  // Approvals (#67). GET folds the log for what is still awaiting a decision;
+  // POST answers one. Answering queues an input, so the agent resumes on its
+  // own rather than waiting for the human to also send a message.
+  if (url.pathname.match(/^\/v1\/sessions\/[^/]+\/approvals$/) && req.method === "GET") {
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ approvals: rt.pendingApprovals() }));
+  }
+  const ap = url.pathname.match(/^\/v1\/sessions\/[^/]+\/approvals\/([^/]+)$/);
+  if (ap && req.method === "POST") {
+    let body;
+    try { body = JSON.parse((await readBody(req)) || "{}"); }
+    catch { res.writeHead(400); return res.end(JSON.stringify({ error: "invalid json" })); }
+    // Explicit rather than defaulted: a malformed body must not read as approval.
+    if (body.decision !== "approve" && body.decision !== "deny") {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ error: 'decision must be "approve" or "deny"' }));
+    }
+    const out = rt.resolveApproval(ap[1], body.decision === "approve",
+      typeof body.note === "string" ? body.note : undefined);
+    // 409, not 404: the id may be perfectly real and simply already answered,
+    // which is what a double-click looks like.
+    res.writeHead(out.ok ? 200 : 409, { "content-type": "application/json" });
+    return res.end(JSON.stringify(out));
+  }
+
   const m = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/events(\/stream)?$/);
   if (!m) { res.writeHead(404); return res.end("not found"); }
 

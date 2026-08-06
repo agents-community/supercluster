@@ -61,6 +61,18 @@ function eventToLine(ev, { history = false } = {}) {
       if (typeof s !== "string") s = "";
       return { kind: "tool", text: name, summary: s.replace(/\s+/g, " ").slice(0, 64), dim: history };
     }
+    // Approvals (#67). The request is the one line a user MUST act on, so it
+    // gets its own kind rather than being folded into info.
+    case "tool.approval_requested": {
+      const name = (ev.tool ?? "tool").replace(/^mcp__hand__/, "").replace(/^mcp__/, "");
+      const inp = ev.input || {};
+      let s2 = inp.command ?? inp.path ?? inp.pattern ?? inp.query ?? inp.file_path ?? inp.preview ?? "";
+      if (typeof s2 !== "string") s2 = "";
+      return { kind: "approval", text: name, request: ev.request,
+               summary: s2.replace(/\s+/g, " ").slice(0, 72), dim: history };
+    }
+    case "tool.approval_granted": return { kind: "info", text: `approved ${ev.request}`, dim: history };
+    case "tool.approval_denied": return { kind: "info", text: `denied ${ev.request}`, dim: history };
     case "session.error": return { kind: "error", text: ev.error?.message ?? "error" };
     default: return null;
   }
@@ -93,10 +105,42 @@ function Line({ line }) {
         h(Box, { paddingLeft: 1 }, h(Text, { color: C.text }, (line.text || "") + "▌")));
     case "error":
       return h(Box, {}, chip("!", C.red), h(Text, { color: C.red }, ` ${line.text}`));
+    case "approval":
+      // Deliberately loud: this is the only line where the session is waiting
+      // on the human, and missing it looks like the agent silently stalled.
+      return h(Box, { flexDirection: "column" }, [
+        h(Text, { key: "h", color: C.amber, bold: true },
+          ` ⏸  needs your approval — ${line.text}`),
+        line.summary ? h(Text, { key: "s", color: C.dim }, `    ${line.summary}`) : null,
+        h(Text, { key: "c", color: C.dim },
+          `    /approve ${line.request}   ·   /deny ${line.request}`),
+      ]);
     case "info":
       return h(Text, { color: C.star, italic: true }, ` ✦ ${line.text}`);
     default:
       return null;
+  }
+}
+
+function summariseApproval(input) {
+  const i = input || {};
+  let s = i.command ?? i.path ?? i.pattern ?? i.query ?? i.file_path ?? i.preview ?? "";
+  return typeof s === "string" ? s.replace(/\s+/g, " ").slice(0, 72) : "";
+}
+
+// Answering wakes the session: the brain queues an input so the agent retries
+// the call it was blocked on. So this is an action, not a note for later.
+async function decide({ client, sessionId, append }, args, decision) {
+  const [req, ...rest] = args || [];
+  if (!req) {
+    append({ kind: "info", text: `usage: /${decision} <request-id> [note]` });
+    return;
+  }
+  try {
+    await client.decideApproval(sessionId, req, decision, rest.join(" ") || undefined);
+    append({ kind: "info", text: `${decision === "approve" ? "approved" : "denied"} ${req} — the agent picks up from here` });
+  } catch (e) {
+    append({ kind: "error", text: `${decision}: ${e.message}` });
   }
 }
 
@@ -113,6 +157,26 @@ export const COMMANDS = {
       client.suspend(sessionId)
         .then(() => append({ kind: "info", text: "suspended — the mind sleeps in place (any message wakes it)" }))
         .catch((e) => append({ kind: "error", text: `suspend: ${e.message}` })),
+  },
+  approvals: {
+    desc: "list tool calls waiting on your decision",
+    run: async ({ client, sessionId, append }) => {
+      try {
+        const pending = await client.approvals(sessionId);
+        if (!pending.length) return append({ kind: "info", text: "nothing waiting on you" });
+        for (const a of pending) append({ kind: "approval", text: a.tool, request: a.request, summary: summariseApproval(a.input) });
+      } catch (e) {
+        append({ kind: "error", text: `approvals: ${e.message}` });
+      }
+    },
+  },
+  approve: {
+    desc: "approve a waiting tool call: /approve <id> [note]",
+    run: (ctx, args) => decide(ctx, args, "approve"),
+  },
+  deny: {
+    desc: "refuse a waiting tool call: /deny <id> [reason]",
+    run: (ctx, args) => decide(ctx, args, "deny"),
   },
   sessions: {
     desc: "list your sessions for this agent",
@@ -157,13 +221,15 @@ export const COMMANDS = {
 };
 
 function runCommand(text, ctx) {
-  const name = text.slice(1).trim().split(/\s+/)[0].toLowerCase();
-  const cmd = COMMANDS[name];
+  // Commands take arguments now (/approve <id>), so split rather than just
+  // reading the verb.
+  const [name, ...args] = text.slice(1).trim().split(/\s+/);
+  const cmd = COMMANDS[name.toLowerCase()];
   if (!cmd) {
     ctx.append({ kind: "info", text: `unknown command /${name} — try /help` });
     return;
   }
-  return cmd.run(ctx);
+  return cmd.run(ctx, args);
 }
 
 function Welcome({ cols }) {

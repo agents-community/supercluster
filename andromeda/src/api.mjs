@@ -90,6 +90,13 @@ export class Client {
   setKey(id, apiKey) { return this.json("PUT", `/v1/sessions/${id}/key`, { apiKey }); }
   session(id) { return this.json("GET", `/v1/sessions/${id}`); }
   suspend(id) { return this.json("POST", `/v1/sessions/${id}/suspend`); }
+  // Approvals (#67). Answering one wakes the session — the brain queues an
+  // input so the agent retries the call it was gated on.
+  approvals(id) { return this.json("GET", `/v1/sessions/${id}/approvals`).then((d) => d.approvals ?? []); }
+  decideApproval(id, req, decision, note) {
+    return this.json("POST", `/v1/sessions/${id}/approvals/${encodeURIComponent(req)}`,
+      note ? { decision, note } : { decision });
+  }
   events(id, since) {
     const q = since ? `?since=${encodeURIComponent(since)}` : "";
     return this.json("GET", `/v1/sessions/${id}/message${q}`).then((d) => d.events ?? []);

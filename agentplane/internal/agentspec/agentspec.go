@@ -27,13 +27,18 @@ type AgentSpec struct {
 	Harness string `yaml:"harness"` // claude-code (codex, opencode: planned)
 	// Image must be digest-pinned (@sha256:…) — Substrate invalidates snapshots
 	// on image change, so mutable tags are forbidden by construction.
-	Image               string            `yaml:"image"`
-	SystemPrompt        string            `yaml:"systemPrompt"`
-	Model               string            `yaml:"model,omitempty"`
-	MCP                 map[string]MCPSrv `yaml:"mcp,omitempty"`
-	Allow               []string          `yaml:"allow,omitempty"`
-	Deny                []string          `yaml:"deny,omitempty"`
-	TurnDeadlineSeconds int               `yaml:"turnDeadlineSeconds,omitempty"`
+	Image        string            `yaml:"image"`
+	SystemPrompt string            `yaml:"systemPrompt"`
+	Model        string            `yaml:"model,omitempty"`
+	MCP          map[string]MCPSrv `yaml:"mcp,omitempty"`
+	Allow        []string          `yaml:"allow,omitempty"`
+	Deny         []string          `yaml:"deny,omitempty"`
+	// Ask names tools that run only after a human approves the specific call
+	// (#67). Same vocabulary as Allow/Deny: a bare tool name, or `server/tool`
+	// for a federated MCP tool. A tool here still has to be permitted — Ask
+	// gates a tool, it does not grant one.
+	Ask                 []string `yaml:"ask,omitempty"`
+	TurnDeadlineSeconds int      `yaml:"turnDeadlineSeconds,omitempty"`
 	// APIKeySecret names the namespace Secret holding the vendor key
 	// (key "api-key"). Defaults to the shared "anthropic-api-key".
 	APIKeySecret string `yaml:"apiKeySecret,omitempty"`
@@ -528,6 +533,9 @@ func (s *AgentSpec) runtimeSpec() string {
 	}
 	if len(s.Deny) > 0 {
 		rt["deny"] = s.Deny
+	}
+	if len(s.Ask) > 0 {
+		rt["ask"] = s.Ask
 	}
 	if len(s.MCP) > 0 {
 		m := map[string]mcp{}

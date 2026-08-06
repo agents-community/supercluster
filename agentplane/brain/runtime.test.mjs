@@ -98,5 +98,8 @@ test("the harness sees pushed policy, including what arrives between starts", as
 });
 
 // The last test deliberately leaves a turn open, so the runtime's watchdog
-// interval keeps the loop alive. Nothing is left to assert once the tests pass.
-after(() => process.exit(0));
+// interval keeps the loop alive.
+// The runtime's drive loop and watchdog keep the event loop alive, so the
+// process needs a push. It MUST carry the runner's exit code: a bare
+// process.exit(0) here silently turned every failing assertion into a pass.
+after(() => process.exit(process.exitCode ?? 0));
