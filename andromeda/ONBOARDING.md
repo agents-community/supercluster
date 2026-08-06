@@ -227,6 +227,78 @@ Run `andromeda` with no arguments any time to see the live list.
 
 ---
 
+## Use it from your own code
+
+Andromeda is a client, not the product — everything it does is the HTTP API, so
+you can drive a durable mind from a script, a service, or CI. A URL and a bearer
+token are the whole contract.
+
+```bash
+export ANDROMEDA_URL=https://YOUR-HOST
+export ANDROMEDA_TOKEN=apl_…            # andromeda whoami shows yours
+```
+
+**Create a session and send a message**
+
+```bash
+SID=$(curl -sS -X POST "$ANDROMEDA_URL/v1/sessions" \
+  -H "Authorization: Bearer $ANDROMEDA_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"agent":"starter"}' | jq -r .id)
+
+curl -sS -X POST "$ANDROMEDA_URL/v1/sessions/$SID/events" \
+  -H "Authorization: Bearer $ANDROMEDA_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"Clone github.com/me/app and run the tests"}'
+```
+
+Sending returns **202** — the turn runs asynchronously. Read the result by
+streaming, or by polling the log with a cursor.
+
+**Stream the turn** (SSE; `Last-Event-ID` is honoured, so a dropped connection
+resumes without replaying)
+
+```bash
+curl -sN "$ANDROMEDA_URL/v1/sessions/$SID/events/stream" \
+  -H "Authorization: Bearer $ANDROMEDA_TOKEN"
+```
+
+**Or poll from a cursor** — every event has a monotonic id, and the log is
+durable, so this works across suspend, restart and reconnect:
+
+```bash
+curl -sS "$ANDROMEDA_URL/v1/sessions/$SID/events?since=evt_000042" \
+  -H "Authorization: Bearer $ANDROMEDA_TOKEN"
+```
+
+### Endpoints
+
+| Method | Path | Does |
+|---|---|---|
+| `POST` | `/v1/access` | exchange an allowlisted email for a token (no auth) |
+| `GET` | `/v1/agents` | list agents and the version each serves |
+| `POST` | `/v1/agents` | create or re-version an agent (`Content-Type: application/yaml`) |
+| `GET` | `/v1/agents/{name}/versions` | version history, each with its spec verbatim |
+| `DELETE` | `/v1/agents/{name}` | delete (409 + session list unless `?cascade=true`) |
+| `POST` | `/v1/sessions` | mint a session: `{"agent":"…"}` |
+| `GET` | `/v1/sessions` | your sessions |
+| `GET` | `/v1/sessions/{id}` | status, queue depth, usage |
+| `POST` | `/v1/sessions/{id}/events` | send a message → `202` |
+| `GET` | `/v1/sessions/{id}/events` | the durable log, `?since=evt_…` |
+| `GET` | `/v1/sessions/{id}/events/stream` | SSE |
+| `PUT` | `/v1/sessions/{id}/key` | set your own model key for this session (memory only) |
+| `POST` | `/v1/sessions/{id}/suspend` | sleep it now (it wakes on the next message) |
+| `DELETE` | `/v1/sessions/{id}` | end it |
+| `GET` | `/v1/sessions/{id}/approvals` | calls waiting on a human |
+| `POST` | `/v1/sessions/{id}/approvals/{req}` | `{"decision":"approve"\|"deny"}` |
+| `PUT` | `/v1/credentials/{name}` | store a secret (write-only; values never returned) |
+| `GET` | `/v1/credentials` | names only |
+
+Errors are JSON: `{"error":{"code":"…","message":"…"}}`. A session you do not
+own answers **404**, not 403 — ids cannot be probed.
+
+Full reference: [`agentplane/docs/api.md`](../agentplane/docs/api.md).
+
+---
+
 ## Changing an agent later
 
 `agent create` with an existing `name:` adds a **version**. Sessions already

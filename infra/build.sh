@@ -18,8 +18,22 @@ build() { # dir, config, tagvar
     && gcloud builds submit --config /tmp/cloudbuild.rendered.yaml . )
 }
 
+# The serve image COPYs a prebuilt binary: its Docker context is infra/serve,
+# and the go.mod `replace` points at a sibling substrate checkout that cannot be
+# in that context. So the binary must be compiled here, first.
+#
+# This is not a convenience. Without it `build.sh serve` silently packages
+# whatever binary happens to be sitting in infra/serve — which is how two
+# releases shipped a build from the previous day while every check looked
+# green, because /readyz answers the same on old and new code.
+build_serve_binary() {
+  echo "==> compiling serve binary (infra/serve/agentplane)"
+  ( cd "$root/agentplane" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+      go build -o "$root/infra/serve/agentplane" ./cmd/agentplane )
+}
+
 case "$what" in
-  serve)    build infra/serve       cloudbuild.yaml     SERVE_TAG ;;
+  serve)    build_serve_binary; build infra/serve cloudbuild.yaml SERVE_TAG ;;
   hand)     build hand              cloudbuild.yaml     HAND_TAG ;;
   gitproxy) build gitproxy          cloudbuild.yaml     GITPROXY_TAG ;;
   brain-cc) build agentplane/brain  cloudbuild-cc.yaml    BRAIN_CC_TAG ;;
@@ -28,6 +42,7 @@ case "$what" in
   all)
     # serve first: the dispatcher shares its image, so a half-built set leaves
     # the two on different versions — which is how auto-sleep died silently once.
+    build_serve_binary
     build infra/serve       cloudbuild.yaml     SERVE_TAG
     build hand              cloudbuild.yaml     HAND_TAG
     build gitproxy          cloudbuild.yaml     GITPROXY_TAG
