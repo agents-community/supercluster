@@ -222,6 +222,8 @@ func runServe(args []string) {
 	mux.HandleFunc("GET /v1/sessions/{id}", s.auth(s.handleSessionGet))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.auth(s.handleSessionDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/suspend", s.auth(s.handleSessionSuspend))
+	// The console is unauthenticated markup; the data it fetches is not.
+	mux.HandleFunc("GET /admin", s.handleAdminConsole)
 	mux.HandleFunc("GET /v1/admin/actors", s.auth(s.handleAdminActors))
 	mux.HandleFunc("GET /v1/sessions/{id}/approvals", s.auth(s.handleApprovalList))
 	mux.HandleFunc("POST /v1/sessions/{id}/approvals/{req}", s.auth(s.handleApprovalDecide))
