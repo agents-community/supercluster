@@ -49,3 +49,34 @@ test("every locally imported module is copied into every brain image", () => {
     }
   }
 });
+
+// The COPY check above is not enough: copying a module into an image that does
+// not npm-install its dependencies fails exactly the same way, at actor start.
+// That is precisely what happened — otel.mjs was added to the pi image, which
+// never installed @opentelemetry/api, and every pi session started 502ing.
+test("every bare import in a copied module is installed by that image", () => {
+  const bareImports = (src) =>
+    [...src.matchAll(/from\s+"([^".][^"]*)"/g)].map((m) => m[1])
+      .filter((m) => !m.startsWith(".") && !m.startsWith("node:"))
+      // "@scope/pkg/sub/path.js" -> "@scope/pkg"
+      .map((m) => (m.startsWith("@") ? m.split("/").slice(0, 2).join("/") : m.split("/")[0]));
+
+  for (const df of readdirSync(".").filter((f) => f.startsWith("Dockerfile"))) {
+    const dockerfile = readFileSync(df, "utf8");
+    const copied = [];
+    for (const line of dockerfile.split("\n")) {
+      const m = line.match(/^COPY\s+(.+?)\s+\/app\/?$/);
+      if (m) copied.push(...m[1].split(/\s+/));
+    }
+    // Harness files are copied wholesale, but only the one this image runs is
+    // ever imported — so they are checked separately, per image, below.
+    const needed = new Set();
+    for (const f of copied) {
+      for (const dep of bareImports(readFileSync(f, "utf8"))) needed.add(dep);
+    }
+    for (const dep of needed) {
+      assert.ok(dockerfile.includes(dep),
+        `${df} copies a module importing ${dep} but never installs it — the actor 502s at start`);
+    }
+  }
+});

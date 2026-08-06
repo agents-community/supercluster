@@ -14,9 +14,25 @@
 // runtime's watchdog signal maps to a REAL interrupt (like claude-code, unlike
 // codex's passive between-events check).
 
-import { approvalRequestId } from "../approval.mjs";
+import { approvalRequestId, needsApproval } from "../approval.mjs";
+import { handURL } from "../identity.mjs";
 
 // Translate our AgentSpec tool names (claude-style) to pi's built-ins.
+// AgentSpec tool names -> the HAND's tool names. The hand publishes bash,
+// write, read, list, grep; federated upstream tools arrive as <upstream>__<tool>
+// and are matched by their own name.
+const HAND_TOOL_NAMES = { bash: "bash", read: "read", write: "write", edit: "write", grep: "grep", ls: "list", list: "list", glob: "list" };
+
+function handNames(specNames) {
+  const out = [];
+  for (const a of specNames || []) {
+    const key = String(a).toLowerCase().replace(/\(.*\)$/, "");
+    const t = HAND_TOOL_NAMES[key] ?? (key.includes("/") ? key.replace("/", "__") : null);
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
 const PI_TOOL_NAMES = { bash: "bash", read: "read", write: "write", edit: "edit", grep: "grep", glob: "find", find: "find", ls: "ls" };
 
 // pi exports a definition factory per built-in; a gated tool wraps one of these.
@@ -81,6 +97,57 @@ export function gateToolDefinition(def, ctx, toolName, approvalRequestId) {
   };
 }
 
+// Turn the hand's MCP tools into pi tools (#73).
+//
+// Without this, pi runs its OWN bash/read/write inside the brain actor — the
+// same process that holds the user's model key — so the brain/hand split the
+// platform advertises does not hold for pi, and `credentials:`/`mcp:` never
+// reach it. The model key stays in the brain either way (the brain is what
+// calls the provider); what changes is that model-authored commands stop
+// running next to it.
+//
+// The same customTools lever the approval gate uses, so the two compose: a
+// hand-backed tool wrapped by gateToolDefinition gives pi the approval flow.
+async function handToolDefinitions(ctx) {
+  const url = handURL();
+  if (!url) return null;
+  const [{ Client }, { StreamableHTTPClientTransport }] = await Promise.all([
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/client/streamableHttp.js"),
+  ]);
+  const client = new Client({ name: "agentplane-pi", version: "1.0.0" }, { capabilities: {} });
+  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+  const { tools } = await client.listTools();
+
+  const allow = handNames(ctx.spec.allow);
+  const deny = handNames(ctx.spec.deny);
+  const defs = [];
+  for (const t of tools) {
+    if (allow.length && !allow.includes(t.name)) continue;
+    if (deny.includes(t.name)) continue;
+    const def = {
+      name: t.name,
+      label: t.name,
+      description: t.description ?? "",
+      // MCP inputSchema is JSON Schema, which is what a TypeBox TSchema is at
+      // runtime — pi validates against it directly.
+      parameters: t.inputSchema ?? { type: "object", properties: {} },
+      async execute(_toolCallId, params) {
+        const r = await client.callTool({ name: t.name, arguments: params ?? {} });
+        return {
+          content: r.content ?? [{ type: "text", text: "" }],
+          details: { hand: true, tool: t.name },
+        };
+      },
+    };
+    // `ask` is matched against the tool name the model actually sees.
+    defs.push(needsApproval(t.name, ctx.askList)
+      ? gateToolDefinition(def, ctx, t.name, approvalRequestId)
+      : def);
+  }
+  return { client, defs };
+}
+
 export const pi = {
   name: "pi",
 
@@ -127,36 +194,38 @@ export const pi = {
     }
 
     // Resume by session file when we have one; otherwise create fresh.
-    // Approval gate (#67): swap each gated built-in for a wrapped copy.
+    // Tools come from the HAND when there is one (#73): pi's own bash/read/write
+    // execute inside the brain actor, which is where the model key lives, so a
+    // split agent must not use them. noTools:"all" removes them outright and the
+    // hand's tools are registered in their place under their own names.
     //
-    // The built-in is excluded and re-registered under the SAME name via
-    // customTools, so the model's vocabulary does not change — it still calls
-    // `bash` and needs no telling that a gate exists.
+    // Falling back to pi's local tools when there is no hand is deliberate: a
+    // `hand: false` pi agent is a single-actor agent by declaration, and
+    // silently having no tools would look like a broken model.
     const base = this.optionsFromSpec(ctx.spec, ctx.workdir);
-    const gatedOpts = {};
-    const askNames = piTools(ctx.askList);
-    if (askNames.length) {
-      const customTools = [];
-      for (const name of askNames) {
-        const factory = pkg[PI_DEFINITION_FACTORIES[name]];
-        if (typeof factory !== "function") {
-          // Say so rather than silently dropping OR silently ungating: a missing
-          // tool looks like a broken agent, and a silent ungating looks like the
-          // approval feature works when it does not.
-          console.error(`pi: cannot gate "${name}" — no definition factory exported; it runs UNGATED`);
-          continue;
-        }
-        customTools.push(gateToolDefinition(factory({}), ctx, name, approvalRequestId));
+    let toolOpts = base, handClient = null;
+    try {
+      const bridged = await handToolDefinitions(ctx);
+      if (bridged && bridged.defs.length) {
+        handClient = bridged.client;
+        toolOpts = { ...base, noTools: "all", tools: undefined, excludeTools: undefined,
+                     customTools: bridged.defs };
+        console.log(`pi: ${bridged.defs.length} tool(s) via the hand`);
+      } else if (bridged) {
+        console.error("pi: the hand exposed no tools matching allow/deny — running tool-less");
+        toolOpts = { ...base, noTools: "all", tools: undefined, excludeTools: undefined };
       }
-      if (customTools.length) {
-        gatedOpts.customTools = customTools;
-        gatedOpts.excludeTools = [...(base.excludeTools || []), ...customTools.map((t) => t.name)];
-      }
+    } catch (e) {
+      // Fail CLOSED on tools: running pi's local bash because the hand was
+      // unreachable would silently execute in the brain, which is the exact
+      // thing this change exists to prevent.
+      console.error(`pi: cannot reach the hand (${e.message}) — running tool-less this turn`);
+      toolOpts = { ...base, noTools: "all", tools: undefined, excludeTools: undefined };
     }
+
     const sessionManager = ctx.sessionId ? SessionManager.open(ctx.sessionId) : SessionManager.create(ctx.workdir);
     const { session } = await createAgentSession({
-      ...base,
-      ...gatedOpts,
+      ...toolOpts,
       sessionManager,
       modelRuntime,
       ...(model ? { model } : {}),

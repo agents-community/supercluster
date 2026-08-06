@@ -10,6 +10,12 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 what="${1:-all}"
 
+# NEVER reuse a tag. Deployments run imagePullPolicy: IfNotPresent, so pushing
+# new code to an existing tag changes nothing: the manifest is identical, so no
+# rollout happens, and even `rollout restart` reuses the node's cached layer.
+# The symptom is a deploy that reports success while the old binary keeps
+# running — which cost an hour of debugging a "stale atenet" that was really a
+# stale pod.
 build() { # dir, config, tagvar
   local dir="$1" cfg="$2" tag="$3"
   echo "==> $dir ($cfg) → ${IMAGE_REPO}:${!tag}"

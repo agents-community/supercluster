@@ -16,7 +16,11 @@ WORKDIR /app
 # behaviour — that silently changed a sandbox-boundary control once already
 # (see agentplane/brain/Dockerfile). Bump deliberately.
 ARG PI_AGENT_VERSION=0.83.0
+# @modelcontextprotocol/sdk: pi talks to the hand over MCP (#73), so its tools
+# execute in the sandbox rather than in the brain alongside the model key.
 RUN npm install "@earendil-works/pi-coding-agent@${PI_AGENT_VERSION}" \
+      @modelcontextprotocol/sdk \
+      @opentelemetry/api@^1 @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-grpc \
   && npm cache clean --force
 
 # Every file runtime.mjs or a harness imports must be listed here. A missing
