@@ -92,9 +92,15 @@ type adminActor struct {
 	Version int    `json:"version"` // 0 when the template is unversioned
 	Status  string `json:"status"`
 	Owner   string `json:"owner,omitempty"`
-	// Paired reports whether this brain's hand exists. A brain whose hand has
-	// gone is the failure worth seeing: it stays responsive and answers, but
-	// every tool call fails. Always true for a hand (it is its own evidence).
+	// Paired reports whether this actor's COUNTERPART exists — the hand for a
+	// brain, the brain for a hand. Both directions are failures worth seeing:
+	// a brain without its hand stays responsive and fails every tool call, and
+	// a hand without its brain is a leaked actor holding a DurableDir and
+	// snapshots for a session nobody can reach (#71).
+	//
+	// Defined for both roles on purpose. It was originally hardcoded true for
+	// hands, which made `paired == false` useless as an orphan query: the two
+	// leaked hands on this cluster reported themselves as fine.
 	Paired bool `json:"paired"`
 }
 
@@ -110,6 +116,14 @@ func agentFromTemplate(template string) (string, int) {
 		v = v*10 + int(r-'0')
 	}
 	return strings.TrimSuffix(template, m), v
+}
+
+// counterpartOf names the other half of a split agent.
+func counterpartOf(actor, sid string) string {
+	if strings.HasPrefix(actor, "h-") {
+		return naming.BrainActor(sid)
+	}
+	return naming.HandActor(sid)
 }
 
 // handleAdminActors lists every brain and hand in the atespace.
@@ -150,12 +164,10 @@ func (s *server) handleAdminActors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Which hands exist, so a brain can be reported as unpaired.
-	hands := map[string]bool{}
+	// Which actors exist, so either half can be reported as unpaired.
+	present := map[string]bool{}
 	for _, a := range all {
-		if strings.HasPrefix(a.GetMetadata().GetName(), "h-") {
-			hands[a.GetMetadata().GetName()] = true
-		}
+		present[a.GetMetadata().GetName()] = true
 	}
 
 	probe := r.URL.Query().Get("probe") == "true"
@@ -186,7 +198,7 @@ func (s *server) handleAdminActors(w http.ResponseWriter, r *http.Request) {
 		item := adminActor{
 			Actor: name, Role: role, Session: sid,
 			Agent: agent, Version: version, Status: status,
-			Paired: role == "hand" || hands[naming.HandActor(sid)],
+			Paired: present[counterpartOf(name, sid)],
 		}
 		if s.owners != nil {
 			if o, ok := s.owners.owner(sid); ok {

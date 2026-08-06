@@ -242,38 +242,6 @@ func runServe(args []string) {
 	mux.HandleFunc("GET /v1/sessions/{id}/events", s.auth(s.handleEvents))
 	mux.HandleFunc("GET /v1/sessions/{id}/events/stream", s.auth(s.handleStream))
 
-	// The fleet console and its API run on a SEPARATE listener, deliberately.
-	//
-	// The ingress routes `/` to the public port, so anything registered on the
-	// main mux is on the internet — today over plain HTTP (F2/#20). An operator
-	// console listing every user's sessions does not belong there, and it does
-	// not need to be: the people who use it have kubectl.
-	//
-	//     kubectl -n agentplane port-forward deploy/agentplane-serve 7434:7434
-	//     open http://localhost:7434/admin
-	//
-	// The admin token is still required on this port. Not being routable is a
-	// second layer, not the only one — a port-forward is available to anyone
-	// with cluster access, which is not the same set as the admin allowlist.
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("GET /admin", s.handleAdminConsole)
-	adminMux.HandleFunc("GET /v1/admin/actors", s.auth(s.handleAdminActors))
-	adminSrv := &http.Server{
-		Addr:              env("AGENTPLANE_ADMIN_ADDR", ":7434"),
-		Handler:           adminMux,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-	go func() {
-		logger.Info("serve: admin console listening (not exposed by the Service)",
-			"addr", adminSrv.Addr, "admins", s.admins.count())
-		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// Not fatal: the platform must keep serving users even if the
-			// operator console cannot bind.
-			logger.Error("serve: admin listener stopped", "err", err)
-		}
-	}()
-
 	srv := &http.Server{
 		Addr: *addr,
 		// otelhttp names the root span after the mux route (http.route).
@@ -291,7 +259,6 @@ func runServe(args []string) {
 		shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shCtx)
-		_ = adminSrv.Shutdown(shCtx)
 	}()
 
 	logger.Info("serve: listening", "addr", *addr, "auth", s.tokens.enabled(),

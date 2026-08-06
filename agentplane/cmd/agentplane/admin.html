@@ -92,6 +92,7 @@
 
   .half { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; background: var(--panel-2); }
   .half.missing { background: transparent; border: 1px dashed var(--warn); color: var(--warn); }
+  .half.absent  { background: transparent; border: 1px dashed var(--line); color: var(--ink-faint); }
   .role { font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; font-weight: 650; min-width: 42px; }
   .role.brain { color: var(--brain); }
   .role.hand  { color: var(--hand); }
@@ -233,8 +234,14 @@ const agentLabel = (a) => a ? esc(a.agent) + (a.version ? ` <span class="v">v${a
 
 function half(a, role) {
   if (!a) {
-    return `<div class="half missing"><span class="role ${role}">${role}</span>
-      <span class="agent">no ${role} actor</span></div>`;
+    // A missing BRAIN is unambiguous garbage — a hand nobody can reach, holding
+    // a workspace and snapshots. A missing hand is not: agents without
+    // `hand: true` (codex, pi) never had one, and warning about those would
+    // train people to ignore the warning that matters.
+    const cls = role === "brain" ? "half missing" : "half absent";
+    const label = role === "brain" ? "no brain — orphaned" : "no hand (not a split agent)";
+    return `<div class="${cls}"><span class="role ${role}">${role}</span>
+      <span class="agent">${label}</span></div>`;
   }
   return `<div class="half"><span class="role ${role}">${role}</span>
     <span class="agent">${agentLabel(a)}</span>${pill(a.status)}</div>`;

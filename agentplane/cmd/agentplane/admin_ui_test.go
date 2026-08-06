@@ -37,24 +37,31 @@ func TestAdminConsoleServesSelfContainedPage(t *testing.T) {
 	}
 }
 
-// The ingress routes `/` to the public port, so a route on the main mux is on
-// the internet. This asserts the admin surface is not registered there —
-// a one-line mistake would silently publish every user's session list.
-func TestAdminRoutesAreNotOnThePublicMux(t *testing.T) {
-	src, err := os.ReadFile("serve.go")
+// serve is reachable from the internet — its ingress routes `/` — so the fleet
+// view lives in a separate process with no Service of its own. This asserts the
+// split holds: one careless line in serve.go would publish every user's session
+// list, and it would look like any other route registration.
+func TestAdminRoutesLiveOnlyInTheConsole(t *testing.T) {
+	serveSrc, err := os.ReadFile("serve.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []string{`mux.HandleFunc("GET /admin"`, `mux.HandleFunc("GET /v1/admin/actors"`} {
-		// adminMux.HandleFunc(...) is the intended form; plain mux.HandleFunc is not.
-		for _, line := range strings.Split(string(src), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, route) {
-				t.Errorf("admin route registered on the PUBLIC mux: %s", trimmed)
-			}
+	for _, bad := range []string{`"GET /admin"`, `"GET /v1/admin/actors"`} {
+		if strings.Contains(string(serveSrc), bad) {
+			t.Errorf("serve.go registers %s — that puts the fleet view on the public endpoint", bad)
 		}
 	}
-	if !strings.Contains(string(src), `adminMux.HandleFunc("GET /admin"`) {
-		t.Error("the console is not registered on the admin mux either — it would 404 everywhere")
+	consoleSrc, err := os.ReadFile("console.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"GET /admin"`, `"GET /v1/admin/actors"`} {
+		if !strings.Contains(string(consoleSrc), want) {
+			t.Errorf("console.go does not register %s — it would 404 everywhere", want)
+		}
+	}
+	// The data route must stay behind auth even though nothing routes to it.
+	if !strings.Contains(string(consoleSrc), `s.auth(s.handleAdminActors)`) {
+		t.Error("the fleet API is not wrapped in auth")
 	}
 }
