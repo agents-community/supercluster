@@ -12,7 +12,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRuntime } from "./runtime.mjs";
-import { claudeCode, needsApproval, approvalRequestId } from "./harness/claude-code.mjs";
+import { claudeCode } from "./harness/claude-code.mjs";
+import { needsApproval, approvalRequestId } from "./approval.mjs";
 
 function newRuntime(spec, workdir = mkdtempSync(join(tmpdir(), "approval-"))) {
   return {

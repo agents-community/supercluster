@@ -1,0 +1,96 @@
+# agentplane-console — the platform team's fleet view (#70).
+#
+# Deliberately NOT part of agentplane-serve, and deliberately with NO Service:
+#
+#   * serve is reachable from the internet (its ingress routes `/`), and an
+#     operator view of every user's sessions has a different audience and a
+#     different blast radius. Sharing that process meant one mux edit away from
+#     publishing it.
+#   * With no Service there is nothing for an Ingress to point at, so it cannot
+#     be exposed by editing a path rule. Reaching it is an explicit act:
+#
+#       kubectl -n agentplane port-forward deploy/agentplane-console 7434:7434
+#       open http://localhost:7434/admin
+#
+# It still requires a token on the admin allowlist. Un-routable is a second
+# layer, not the only one — a port-forward is available to anyone with cluster
+# access, which is a wider set than the people who should read this.
+#
+# It runs the same image as serve (one binary, one build) so the console and the
+# API it calls cannot drift to different versions, and reuses the serve
+# ServiceAccount because it needs exactly what serve already has for this work:
+# the projected token ateapi authenticates with, and Workload Identity for the
+# Firestore lookup that resolves owners. It is read-only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentplane-console
+  namespace: agentplane
+  labels: { app: agentplane-console }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: agentplane-console }
+  template:
+    metadata:
+      labels: { app: agentplane-console }
+    spec:
+      serviceAccountName: agentplane-serve
+      containers:
+      - name: console
+        image: ${IMAGE_REPO}/agentplane-serve:${SERVE_TAG}
+        # command:, not args: — the image's ENTRYPOINT is already
+        # `agentplane serve -addr :7433`, and args are APPENDED to it. Using
+        # args here silently started a second copy of serve on :7433 that
+        # ignored the console flags entirely.
+        command: ["/usr/local/bin/agentplane", "console", "-addr", ":7434"]
+        env:
+        - { name: SUBSTRATE_ATEAPI, value: "api.ate-system.svc:443" }
+        - { name: SUBSTRATE_ATENET, value: "atenet-router.ate-system.svc:80" }
+        - { name: SUBSTRATE_ATESPACE, value: "agents" }
+        - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
+        - { name: AGENTPLANE_PROJECT, value: "${PROJECT_ID}" }
+        - { name: AGENTPLANE_TOKENS_FILE, value: "/etc/agentplane/tokens.json" }
+        - { name: AGENTPLANE_ADMIN_EMAILS_FILE, value: "/etc/agentplane-access/admins" }
+        ports:
+        - { name: console, containerPort: 7434 }
+        readinessProbe:
+          httpGet: { path: /healthz, port: 7434 }
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /healthz, port: 7434 }
+          periodSeconds: 20
+        resources:
+          requests: { cpu: 20m, memory: 64Mi }
+          limits: { memory: 256Mi }
+        # Matches what serve is proven to run with, plus the two tightenings
+        # that cannot affect a cloud-sdk based image. Deliberately NOT
+        # readOnlyRootFilesystem/runAsUser: serve does not use them, and a
+        # console that crashloops on a hardening flag is worse than one that
+        # runs with the same posture as the process it was carved out of.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+        volumeMounts:
+        # ateapi authenticates callers with a projected ServiceAccount token —
+        # without this the console starts fine and then fails every actor list
+        # with "Unauthenticated: missing bearer token".
+        - { name: ateapi-token, mountPath: /run/ateapi-token, readOnly: true }
+        - { name: tokens, mountPath: /etc/agentplane, readOnly: true }
+        - { name: allowed-emails, mountPath: /etc/agentplane-access, readOnly: true }
+      volumes:
+      - name: ateapi-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: api.ate-system.svc
+              expirationSeconds: 3600
+              path: token
+      - name: tokens
+        secret:
+          secretName: agentplane-serve-tokens
+          optional: true
+      - name: allowed-emails
+        configMap:
+          name: agentplane-allowed-emails
+          optional: true
