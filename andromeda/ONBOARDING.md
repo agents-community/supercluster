@@ -11,40 +11,190 @@ is used only for your session, held in memory, never stored.
 
 ---
 
-## 60-second quickstart
+## Before you start
 
-```bash
-# 1. Log in once — it asks for your host's URL and your email, then saves your
-#    token to ~/.andromeda (you won't need to paste it again).
-npx @agentsupercluster/andromeda login
+**On your machine:** Node.js **18.17 or newer** (`node -v`). That is the whole
+list. No clone, no Docker, no `kubectl`, no cluster access — andromeda talks to
+the control plane over HTTPS with a URL and a token.
 
-# 2. Bring your own model key (only the one your agent uses)
-export ANTHROPIC_API_KEY="sk-ant-…"             # or OPENAI_API_KEY / GEMINI_API_KEY
-
-# 3. Talk to a mind — your token is remembered, nothing to paste
-npx @agentsupercluster/andromeda --agent starter      # start a new conversation
-npx @agentsupercluster/andromeda                        # or list agents & live sessions
-```
-
-That's it — no clone, no `npm install`, no token juggling. `login` fetches your
-token from your email and stores it; every later run just works.
-
-> `andromeda whoami` shows who you're logged in as · `andromeda logout` clears it.
-> Prefer no install? `npm i -g @agentsupercluster/andromeda`, then just run `andromeda`.
-
----
-
-## What you need from your host
+**From your host:**
 
 | Thing | Looks like | What it's for |
 |-------|-----------|---------------|
 | **Endpoint URL** | `https://YOUR-HOST` | where the control plane lives — you enter it at `login` |
 | **On the allowlist** | your email | so `login` can issue your token — ask your host to add it |
-| **An agent name** | e.g. `starter` | which mind to talk to (run with no args to list) |
 
-`login` handles the token for you and saves it to `~/.andromeda`. Advanced: any
-run can be overridden with `--url` / `--token` flags or `ANDROMEDA_URL` /
-`ANDROMEDA_TOKEN` env vars — they win over the saved config.
+**Optional:** your own model API key. Without one, your agent falls back to the
+host's shared key if there is one.
+
+---
+
+## Step 1 — Install and log in
+
+```bash
+npm install -g @agentsupercluster/andromeda
+andromeda login          # asks for the URL and your email, saves your token
+```
+
+`login` writes your token to `~/.andromeda`, so nothing needs pasting again.
+Prefer not to install? Every command works as `npx @agentsupercluster/andromeda …`.
+
+```bash
+andromeda whoami         # who you are and which cluster you're pointed at
+andromeda agent ls       # what already exists here
+```
+
+> Any run can be overridden with `--url` / `--token`, or `ANDROMEDA_URL` /
+> `ANDROMEDA_TOKEN` — they win over the saved config.
+
+---
+
+## Step 2 — Define your agent
+
+An agent is a YAML spec. The two fields that make it *yours* are
+**`systemPrompt`** (what it is for) and its **tool policy** (what it may do).
+
+Start from one that already runs here rather than writing from scratch:
+
+```bash
+andromeda agent get starter > my-agent.yaml
+```
+
+```yaml
+name: reviewer                    # your own name — reusing one makes a new VERSION
+harness: claude-code              # or codex, pi
+model: claude-sonnet-5
+image: gcr.io/…@sha256:…          # keep whatever `agent get` gave you (see below)
+hand: true                        # tools run in the sandbox, not in the reasoning layer
+
+systemPrompt: >-
+  You review pull requests. Be specific and cite line numbers. Ask before
+  changing anything outside the diff.
+
+allow: [WebFetch]                 # auto-approved (see the tool list below)
+deny:  [Bash, Write, Edit, Read, Grep, Glob, NotebookEdit]
+turnDeadlineSeconds: 600
+```
+
+Then apply it and talk to it:
+
+```bash
+andromeda agent create -f my-agent.yaml
+andromeda agent ls                       # wait for phase: Ready (a snapshot bakes)
+andromeda --agent reviewer
+```
+
+> **Keep the `image:` digest you were given.** It pins the brain image, and the
+> digest differs per platform — one copied from anywhere else is wrong here.
+
+### The tools you can name
+
+These are Claude Code's built-in tools; use these exact names in `allow` / `deny`.
+
+| Tool | Does |
+|---|---|
+| `Bash` | run shell commands |
+| `Read` · `Write` · `Edit` | read and change files |
+| `Glob` · `Grep` | find files by name · search their contents |
+| `NotebookEdit` | edit Jupyter cells |
+| `WebFetch` | fetch a URL |
+| `WebSearch` | search the web |
+| `TodoWrite` | keep a task list across a long job |
+| `Agent` | spawn a subagent (see the caveat below) |
+
+MCP tools are named `mcp__<server>__<tool>`. **With `hand: true` they arrive
+through the hand instead**, as `mcp__hand__<server>__<tool>` — so
+`allow: [mcp__github__*]` matches nothing. Scope them with `server/tool`:
+
+```yaml
+mcp:
+  github:
+    url: https://api.githubcopilot.com/mcp/
+    headersFrom:
+      Authorization: {credential: gh-token, format: "Bearer {}"}
+
+allow: [github/list_issues]       # this one is permitted; github's others are not
+```
+
+Naming any tool of a server turns that server into an allow-list. A `server/tool`
+entry that matches nothing **fails session creation** rather than silently
+permitting everything — that mistake used to look like a working restriction.
+
+### What `allow` and `deny` actually do — and the third option that doesn't exist
+
+There are **two** outcomes for any tool, not three:
+
+| You write | Outcome |
+|---|---|
+| `allow: [X]` | X runs, without asking |
+| `deny: [X]` | X is removed outright |
+| neither | X does not run |
+
+- `deny` removes a tool. Use it for the reasoning layer's own `Bash`/`Write`/
+  `Edit` when `hand: true` — that split is the point.
+- `allow` auto-approves. The hand's own tools (`mcp__hand__*`) are allowed for
+  you automatically.
+- **Unlisted is effectively denied.** Sessions are headless, so an unlisted tool
+  has no route to approval.
+
+> **There is no "ask me first" mode today.** A durable mind runs unattended —
+> that is the whole point of detaching — so there is nobody at the terminal when
+> a tool fires. Sessions run with the permission prompt disabled, and no
+> approval request is ever sent to andromeda. Decide the policy in the spec, up
+> front. If you want a human in the loop, keep the risky tool out of `allow` and
+> have the agent tell you what it would do.
+
+The safety boundary is the **gVisor sandbox**, not these lists.
+
+> **Subagents (`Agent`) are not a boundary.** A subagent does not reliably
+> inherit `deny` — an escrowed transcript shows `Bash` running under an agent
+> that denied it. Do not treat per-subagent tool policy as enforced.
+
+### What web tools can and cannot do here
+
+Worth knowing before you allow them:
+
+- **`WebSearch` is run by the model provider**, not by your agent — results come
+  back in the response. If your provider or region does not offer it, allowing
+  it changes nothing.
+- **`WebFetch` runs in the reasoning layer, not on the hand.** It is the one
+  exception to "the mind decides, the hand executes" — fetched page content
+  lands directly in the model's context without passing through the sandbox
+  that runs your commands.
+- **`egress.allowedHosts` does not constrain it yet.** That field is declarative
+  today; the enforcing gateway is not deployed. Actors can reach any public
+  address, so allowing `WebFetch` means unrestricted outbound fetching, not
+  fetching limited to the hosts you listed.
+
+If you want the agent reading the web *and* want that traffic constrained, have
+it clone and read a repo through the git proxy instead — that path is enforced.
+
+---
+
+## Step 3 — Talk to it
+
+```bash
+andromeda --agent reviewer          # new mind
+andromeda --session sess-abc123     # re-attach to one you started before
+andromeda                           # list everything, then pick
+```
+
+**While chatting** — press **enter** to send. Everything else is a typed
+command; anything starting with `/` goes to the terminal, never to the agent.
+
+| Command | Does |
+|-----|------|
+| **/sleep** | suspend the mind in place (frees resources; wakes on your next message) |
+| **/sessions** | list your sessions for this agent |
+| **/usage** | tokens & cost this session |
+| **/help** | list all commands |
+| **/quit** | detach — the mind keeps its full memory; re-attach any time |
+
+There are no other key bindings. `esc` and `ctrl+s` used to detach and suspend
+and were removed: a stray keypress mid-turn made a working agent look like it
+had stopped.
+
+When you detach, Andromeda prints the exact command to come back to that mind.
 
 ---
 
@@ -65,35 +215,6 @@ configured).
 
 ---
 
-## Using it
-
-**Start or resume a conversation**
-
-```bash
-andromeda --agent starter        # new mind
-andromeda --session sess-abc123     # re-attach to one you started before
-andromeda                           # list everything, then pick
-```
-
-**While chatting**
-
-| Input | Does |
-|-----|------|
-| **enter** | send your message |
-| **/sleep** | suspend the mind in place (frees resources; wakes on your next message) |
-| **/sessions** | list your sessions for this agent |
-| **/usage** | tokens & cost this session |
-| **/help** | list all commands |
-| **/quit** | detach (esc works too) |
-| **esc** | detach — the mind keeps its full memory; re-attach any time |
-
-Anything you type starting with `/` is a TUI command, never sent to the agent
-(ctrl+s still works as a `/sleep` alias).
-
-When you detach, Andromeda prints the exact command to come back to that mind.
-
----
-
 ## See why "durable" matters (try this)
 
 The `starter` agent shows the whole point — a task too big for one sitting:
@@ -103,7 +224,7 @@ The `starter` agent shows the whole point — a task too big for one sitting:
    > *"Clone `github.com/<some-repo>`, then upgrade it from `<old>` to `<new>`. Write a plan first, then start working through it — I'll check back."*
 3. Watch it clone the repo into its sandbox, write a migration plan, and begin —
    editing files and running tests on the hand.
-4. **Walk away:** hit `esc` to detach (close your laptop, go to a meeting).
+4. **Walk away:** type `/quit` to detach (close your laptop, go to a meeting).
 5. **Come back later:** `andromeda --session sess-…` — it's still mid-migration,
    remembers the plan, the repo state, what's already converted and what's next.
    Just say *"continue."*
@@ -144,36 +265,16 @@ Run `andromeda` with no arguments any time to see the live list.
 
 ---
 
-## Make your own agent
+## Changing an agent later
 
-An agent is a short YAML spec: a system prompt, a model, and what it's allowed
-to do. You don't need a checkout of anything — start from an agent that already
-runs on your platform:
-
-```bash
-andromeda agent get starter > my-agent.yaml    # a real, working spec
-```
-
-Open it and change two things: `name:` (pick your own — reusing a name creates a
-new **version** of that agent instead) and `systemPrompt:` (what your agent is
-for). The file is commented throughout; leave the rest alone the first time.
+`agent create` with an existing `name:` adds a **version**. Sessions already
+running stay on the version they started with, so nobody's mind breaks under
+them; new sessions get the new one.
 
 ```bash
-andromeda agent create -f my-agent.yaml
-andromeda agent ls                             # wait for phase: Ready
-andromeda --agent my-agent
+andromeda agent get reviewer --version 2 > v2.yaml   # fetch any earlier version
+andromeda agent rm reviewer                          # refuses if live sessions would die
 ```
-
-The first `create` bakes a snapshot, so `Ready` takes a few seconds. Copying
-`starter` rather than writing from scratch matters for one non-obvious reason:
-the spec pins the brain **image digest**, which differs per platform. The one
-you just fetched is already correct for yours.
-
-Editing a live agent is the same command — `agent create` with an existing
-`name:` adds a version. Sessions already running stay on the version they
-started with, so nobody's mind breaks under them; new sessions get the new one.
-`agent get <name> --version N` fetches any earlier version, and `agent rm <name>`
-deletes one (it refuses, and lists them, if live sessions would die with it).
 
 ---
 
@@ -203,16 +304,21 @@ deletes one (it refuses, and lists them, if live sessions would die with it).
 | agent replies but does nothing useful | make sure your model key env var is `export`ed (a plain `VAR=…` won't reach the process) |
 | first message is slow | that's a sleeping mind waking from its checkpoint — it's quick after that |
 | `node: bad option` / crashes | you need Node 18.17+ (`node -v` to check) |
+| `allows tools that no connected MCP server exposes` at session start | a `server/tool` entry in `allow` is misspelled — the error names the servers that did connect |
+| a tool you expected never runs | it isn't in `allow`. There is no approval prompt; unlisted means it won't run |
+| `sh: 1: andromeda: not found` from `npx` | you're inside a checkout of andromeda itself. Run it from any other directory, or `npm install -g` |
 
 ---
 
 ## One command to remember
 
 ```bash
-npx @agentsupercluster/andromeda login                          # once — saves your token
+npm install -g @agentsupercluster/andromeda   # once
+andromeda login                               # once — saves your token
 
-ANTHROPIC_API_KEY=sk-ant-your_key \
-npx @agentsupercluster/andromeda --agent starter               # anytime after
+andromeda agent get starter > my-agent.yaml   # define your own: prompt + tools
+andromeda agent create -f my-agent.yaml
+andromeda --agent my-agent                    # anytime after
 ```
 
 Welcome aboard. Talk to a mind, leave, come back — it remembers. 🌌

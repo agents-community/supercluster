@@ -3,7 +3,7 @@
 // but this folder.
 
 import React, { useEffect, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import { readFileSync } from "node:fs";
@@ -151,7 +151,7 @@ export const COMMANDS = {
     },
   },
   quit: {
-    desc: "detach (the mind keeps living; esc does the same)",
+    desc: "detach — the mind keeps living; re-attach any time",
     run: ({ exit }) => exit(),
   },
 };
@@ -182,7 +182,7 @@ function Welcome({ cols }) {
       "talk to it · ",
       h(Text, { key: "s", color: C.amber }, "/sleep"), " to sleep it · ",
       h(Text, { key: "h", color: C.violet }, "/help"), " for commands · ",
-      h(Text, { key: "e", color: C.cyan }, "esc"), " to leave.",
+      h(Text, { key: "e", color: C.cyan }, "/quit"), " to leave.",
     ])));
 }
 
@@ -218,13 +218,12 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
 
   const cmdCtx = { client, sessionId, agentName, append, exit };
 
-  useInput((ch, key) => {
-    if (key.escape) exit();
-    if (key.ctrl && ch === "s") { // kept as a /sleep alias — no muscle-memory break
-      setTimeout(() => setInput(""), 0); // TextInput also gets the key — clear it
-      runCommand("/sleep", cmdCtx);
-    }
-  });
+  // No global key bindings. esc used to detach and ctrl+s used to suspend, and
+  // both are gone deliberately: they fired mid-turn from a stray keypress, and
+  // the two actions they triggered are not equally recoverable — /sleep parks a
+  // mind you can wake, while detaching mid-answer looks like the agent stopped
+  // working. Every action is now a typed command (/sleep, /quit, /help), which
+  // is also the only form that can be shown in the UI and documented honestly.
 
   const submit = async (text) => {
     text = text.trim();
@@ -285,7 +284,7 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
       h(Text, { color: C.dim }, [
         h(Text, { key: "1", color: C.cyan }, "enter"), " send  ",
         h(Text, { key: "2", color: C.violet }, "/help"), " commands  ",
-        h(Text, { key: "3", color: C.pink }, "esc"), " detach",
+        h(Text, { key: "3", color: C.pink }, "/quit"), " detach",
       ])));
 }
 
