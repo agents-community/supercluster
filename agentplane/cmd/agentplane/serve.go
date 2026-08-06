@@ -370,6 +370,15 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		s.notReady(w, failedComponent(err), "control plane is not serving", err)
 		return
 	}
+
+	// A healthy ateapi says nothing about atenet, which routes every turn over
+	// a different path. Twice now atenet has gone stale — new actors unroutable
+	// while existing sessions kept working — and both times this check stayed
+	// green and a user found the outage instead (#60).
+	if component, msg, err := checkAtenet(ctx, s.sc); component != "" {
+		s.notReady(w, component, msg, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ready": true})
 }
 
