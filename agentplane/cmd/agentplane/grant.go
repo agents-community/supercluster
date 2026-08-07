@@ -75,7 +75,7 @@ func signWithKey(key, payload []byte) string {
 func mintAdminGrant(sid string) string {
 	key := grantSigningKey()
 	if len(key) == 0 {
-		return "" // grants disabled — callers fall back, see adminAuthHeader
+		return "" // no signing key: admin calls will be refused, which is correct
 	}
 	c := grantClaims{Sid: sid, Admin: true, Exp: time.Now().Add(adminGrantTTL).Unix()}
 	payload, _ := json.Marshal(c)
@@ -84,14 +84,18 @@ func mintAdminGrant(sid string) string {
 }
 
 // adminAuthHeader is what serve sends on a hand /admin call: a session-scoped
-// grant when signing is configured, else the legacy shared token so an
-// un-upgraded deployment keeps working.
+// grant, and nothing else.
+//
+// There is no fallback to HAND_ADMIN_TOKEN. That token was mounted into every
+// hand, and the environment scrub did not put it out of reach — tools run as
+// root in the hand's container and could still read it from /proc/1/environ.
+// Leaving a path that accepted it would have preserved the whole vulnerability
+// alongside the fix. Without a signing key this returns empty and the hand
+// refuses: fail closed, loudly, rather than silently reverting to a fleet-wide
+// secret.
 func adminAuthHeader(sid string) string {
 	if g := mintAdminGrant(sid); g != "" {
 		return "Bearer " + g
-	}
-	if t := env("HAND_ADMIN_TOKEN", ""); t != "" {
-		return "Bearer " + t
 	}
 	return ""
 }

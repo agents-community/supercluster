@@ -32,7 +32,6 @@ const tracer = trace.getTracer("agentplane-hand");
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
-const ADMIN_TOKEN = process.env.HAND_ADMIN_TOKEN || ""; // legacy gate; see adminAuthed
 // Where to verify admin grants. From the ENVIRONMENT, never the request body —
 // a caller-supplied verification endpoint would be no check at all.
 const SERVE_BASE = process.env.AGENTPLANE_SERVE_BASE || "http://agentplane-serve.agentplane.svc:7433";
@@ -315,15 +314,20 @@ const verifiedGrants = new Map(); // token -> expiry ms
 
 // Authorize an /admin call (#74).
 //
-// Preferred: a session-scoped grant minted by serve. The hand cannot check the
+// A session-scoped grant minted by serve is the ONLY way in. The hand cannot check the
 // HMAC itself — that needs the signing key, and keeping that key out of a
 // sandbox running model-written code is the entire point — so it asks serve,
 // exactly as it already does for credentials.
 //
 // The returned session is compared against this hand's OWN identity, so a grant
-// lifted out of one session's hand does not authorize another's. That is the
-// property HAND_ADMIN_TOKEN never had: one static secret mounted into every
-// hand, where reading it anywhere authorized /admin everywhere.
+// lifted out of one session's hand does not authorize another's.
+//
+// There is deliberately no static-token fallback and no open dev mode. The old
+// HAND_ADMIN_TOKEN was one secret mounted into every hand, and it stayed usable
+// even after the environment scrub because tools run as root in this container
+// and could read it out of /proc/1/environ. Accepting it here would have kept
+// that path open regardless of the grant work, so it is gone — and the token is
+// no longer mounted into the hand at all.
 //
 // SERVE_BASE comes from the environment, never from the request — taking it
 // from the caller would let an attacker point verification at a server of their
@@ -331,13 +335,12 @@ const verifiedGrants = new Map(); // token -> expiry ms
 async function adminAuthed(req) {
   const h = req.headers["authorization"] || "";
   const tok = h.startsWith("Bearer ") ? h.slice(7) : "";
-  if (!tok) return !ADMIN_TOKEN; // no credential: only the dev-mode open case
+  if (!tok) return false; // no credential, no access — there is no open mode
 
   const cached = verifiedGrants.get(tok);
   if (cached && cached > Date.now()) return true;
 
-  // A grant is `<base64>.<sig>`; anything else can only be the legacy token.
-  if (tok.includes(".")) {
+  {
     try {
       const r = await fetch(`${SERVE_BASE}/v1/hand/admin-verify`, {
         headers: { Authorization: `Bearer ${tok}` },
@@ -361,9 +364,7 @@ async function adminAuthed(req) {
     }
   }
 
-  // Legacy shared token, kept only so a deployment without a grant signing key
-  // keeps working. Remove once AGENTPLANE_GRANT_KEY is set everywhere.
-  return ADMIN_TOKEN !== "" && tok === ADMIN_TOKEN;
+  return false;
 }
 
 async function readJson(req) {
