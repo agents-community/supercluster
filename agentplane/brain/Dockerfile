@@ -27,6 +27,11 @@ WORKDIR /app
 # copy of @opentelemetry/api, so the brain needs its own SDK here — see otel.mjs.
 RUN npm install "@anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK_VERSION}" @opentelemetry/api@^1 @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-grpc && npm cache clean --force
 
+# Every file runtime.mjs or a harness imports must be listed here. A missing
+# one fails at ACTOR START, not at build: node resolves imports lazily and
+# `docker build` is perfectly happy. otel.mjs was missing from the pi and codex
+# images — invisible only because those had not been rebuilt since runtime.mjs
+# started importing it.
 COPY server.mjs runtime.mjs identity.mjs otel.mjs /app/
 COPY harness /app/harness
 COPY entrypoint.sh /entrypoint.sh

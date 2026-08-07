@@ -16,10 +16,19 @@ WORKDIR /app
 # behaviour — that silently changed a sandbox-boundary control once already
 # (see agentplane/brain/Dockerfile). Bump deliberately.
 ARG PI_AGENT_VERSION=0.83.0
+# @modelcontextprotocol/sdk: pi talks to the hand over MCP (#73), so its tools
+# execute in the sandbox rather than in the brain alongside the model key.
 RUN npm install "@earendil-works/pi-coding-agent@${PI_AGENT_VERSION}" \
+      @modelcontextprotocol/sdk \
+      @opentelemetry/api@^1 @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-grpc \
   && npm cache clean --force
 
-COPY server.mjs runtime.mjs identity.mjs /app/
+# Every file runtime.mjs or a harness imports must be listed here. A missing
+# one fails at ACTOR START, not at build: node resolves imports lazily and
+# `docker build` is perfectly happy. otel.mjs was missing from the pi and codex
+# images — invisible only because those had not been rebuilt since runtime.mjs
+# started importing it.
+COPY server.mjs runtime.mjs identity.mjs otel.mjs /app/
 COPY harness /app/harness
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
