@@ -22,13 +22,42 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import {
   connectUpstream, removeUpstream, federatedTools, resolveFederated,
   callFederated, setGitCredentials, upstreamStatus, pullCredentials,
-  configureGitProxy, cloneRepositories,
+  configureGitProxy, cloneRepositories, exposedToTools,
 } from "./gateway.mjs";
 import { initOtel } from "./otel.mjs";
 import { trace, context, propagation, SpanStatusCode } from "@opentelemetry/api";
 
 initOtel(); // start tracing before anything runs (no-op if OTEL endpoint unset)
 const tracer = trace.getTracer("agentplane-hand");
+
+// What a tool subprocess is allowed to see of the hand's environment.
+//
+// Model-written code runs as root in this container, and it used to inherit
+// process.env whole — including HAND_ADMIN_TOKEN, which is mounted into EVERY
+// hand rather than scoped to this session (#74). Reading it in one session
+// therefore yielded the credential that authorizes /admin on every other
+// session's hand.
+//
+// An allowlist rather than a denylist: a new secret added to the deployment
+// must not silently become readable because nobody remembered to exclude it.
+// Credentials the agent explicitly declared are added by the gateway, so the
+// documented `credentials:` feature keeps working.
+const TOOL_ENV_ALLOW = [
+  "PATH", "HOME", "PWD", "LANG", "LC_ALL", "TERM", "TZ",
+  "VIRTUAL_ENV",           // the venv pip packages are installed into
+  "GIT_TERMINAL_PROMPT",   // 0 — git must fail rather than hang asking for a password
+];
+
+function toolEnv(extra = {}) {
+  const env = {};
+  for (const k of TOOL_ENV_ALLOW) {
+    if (process.env[k] !== undefined) env[k] = process.env[k];
+  }
+  for (const k of exposedToTools) {
+    if (process.env[k] !== undefined) env[k] = process.env[k];
+  }
+  return { ...env, ...extra };
+}
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
@@ -184,6 +213,7 @@ function runOwnTool(name, args) {
     case "bash": {
       const r = spawnSync("sh", ["-c", args.command], {
         cwd: WORKDIR, encoding: "utf8", timeout: 120000, maxBuffer: 10 * 1024 * 1024,
+        env: toolEnv(),
       });
       if (r.error) return errResult(`failed to run: ${r.error.message}`);
       const body = (r.stdout || "") + (r.stderr || "");
@@ -226,7 +256,7 @@ function runOwnTool(name, args) {
       const gargs = ["-rnE"];
       if (args.glob) gargs.push(`--include=${args.glob}`);
       gargs.push(args.pattern, ".");
-      const r = spawnSync("grep", gargs, { cwd: base, encoding: "utf8", timeout: 60000, maxBuffer: 5 * 1024 * 1024 });
+      const r = spawnSync("grep", gargs, { cwd: base, encoding: "utf8", timeout: 60000, maxBuffer: 5 * 1024 * 1024, env: toolEnv() });
       if (r.status === 0) return ok(r.stdout || "(no output)");
       if (r.status === 1) return ok("(no matches)");
       return errResult(r.stderr || `grep exited ${r.status}`);

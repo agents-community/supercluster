@@ -14,6 +14,15 @@ import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+// Environment variables the hand DELIBERATELY exposes to tool subprocesses:
+// credentials the agent declared and is meant to use. Everything else in the
+// hand's own environment is scrubbed by toolEnv() — see server.mjs.
+//
+// This exists because a tool subprocess used to inherit process.env whole,
+// which handed model-written code HAND_ADMIN_TOKEN — a token mounted into
+// EVERY hand, not just this one (#74).
+export const exposedToTools = new Set();
+
 // name -> { url, headers, client, tools: [{ name, description, inputSchema }] }
 const upstreams = new Map();
 
@@ -98,9 +107,14 @@ export async function pullCredentials({ serveBase, grant, credentials }) {
         applied.push({ name, ok: true, type: "git", host: p.host || "github.com" });
       } else if (p.type === "env" && p.varName) {
         process.env[p.varName] = p.value;
+        exposedToTools.add(p.varName); // the agent asked for this one
         applied.push({ name, ok: true, type: "env", var: p.varName });
       } else if (p.type === "header") {
-        process.env[`HAND_CRED_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`] = p.value;
+        {
+          const varName = `HAND_CRED_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+          process.env[varName] = p.value;
+          exposedToTools.add(varName); // the agent asked for this one
+        }
         applied.push({ name, ok: true, type: "header" });
       } else {
         applied.push({ name, ok: false, reason: `unsupported type ${p.type}` });
