@@ -653,7 +653,7 @@ func templateCredentialNames(ctx context.Context, sc sessionCtx, agent string) [
 func postHandAdmin(ctx context.Context, sc sessionCtx, sid, path string, body []byte) (string, error) {
 	hand := naming.HandActor(sid)
 	endpoint := fmt.Sprintf("http://%s%s", sc.atenet, path)
-	adminTok := env("HAND_ADMIN_TOKEN", "")
+	adminAuth := adminAuthHeader(sid) // session-scoped grant, not the fleet token (#74)
 	var lastErr error
 	for attempt := 1; attempt <= 4; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -662,8 +662,8 @@ func postHandAdmin(ctx context.Context, sc sessionCtx, sid, path string, body []
 		}
 		req.Host = naming.ActorDNS(hand, sc.atespace)
 		req.Header.Set("Content-Type", "application/json")
-		if adminTok != "" {
-			req.Header.Set("Authorization", "Bearer "+adminTok)
+		if adminAuth != "" {
+			req.Header.Set("Authorization", adminAuth)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
@@ -966,15 +966,15 @@ func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent, user st
 	body, _ := json.Marshal(map[string]any{"upstreams": ups})
 	hand := naming.HandActor(sid)
 	url := fmt.Sprintf("http://%s/admin/upstreams", sc.atenet)
-	adminTok := env("HAND_ADMIN_TOKEN", "")
+	adminAuth := adminAuthHeader(sid) // session-scoped grant, not the fleet token (#74)
 
 	var lastErr error
 	for attempt := 1; attempt <= 4; attempt++ {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		req.Host = naming.ActorDNS(hand, sc.atespace)
 		req.Header.Set("Content-Type", "application/json")
-		if adminTok != "" {
-			req.Header.Set("Authorization", "Bearer "+adminTok)
+		if adminAuth != "" {
+			req.Header.Set("Authorization", adminAuth)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp.StatusCode < 500 {
@@ -1024,15 +1024,15 @@ func pushHandIdentity(ctx context.Context, sc sessionCtx, sid string) error {
 	hand := naming.HandActor(sid)
 	body, _ := json.Marshal(map[string]string{"session": sid, "actor": hand})
 	url := fmt.Sprintf("http://%s/admin/identity", sc.atenet)
-	adminTok := env("HAND_ADMIN_TOKEN", "")
+	adminAuth := adminAuthHeader(sid) // session-scoped grant, not the fleet token (#74)
 
 	var lastErr error
 	for attempt := 1; attempt <= 4; attempt++ {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		req.Host = naming.ActorDNS(hand, sc.atespace)
 		req.Header.Set("Content-Type", "application/json")
-		if adminTok != "" {
-			req.Header.Set("Authorization", "Bearer "+adminTok)
+		if adminAuth != "" {
+			req.Header.Set("Authorization", adminAuth)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp.StatusCode < 500 {

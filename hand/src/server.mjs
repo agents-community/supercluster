@@ -32,7 +32,10 @@ const tracer = trace.getTracer("agentplane-hand");
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
-const ADMIN_TOKEN = process.env.HAND_ADMIN_TOKEN || ""; // gate /admin; empty = open (dev)
+const ADMIN_TOKEN = process.env.HAND_ADMIN_TOKEN || ""; // legacy gate; see adminAuthed
+// Where to verify admin grants. From the ENVIRONMENT, never the request body —
+// a caller-supplied verification endpoint would be no check at all.
+const SERVE_BASE = process.env.AGENTPLANE_SERVE_BASE || "http://agentplane-serve.agentplane.svc:7433";
 mkdirSync(WORKDIR, { recursive: true });
 
 // A hand actor serves exactly one session for its whole life, and atenet
@@ -306,10 +309,61 @@ function buildServer() {
 
 // ---- admin (control) plane: serve injects upstreams + credentials here -------
 
-function adminAuthed(req) {
-  if (!ADMIN_TOKEN) return true; // open in dev; set HAND_ADMIN_TOKEN in prod
+// Grants verified recently, so a burst of admin calls at session setup does not
+// become a burst of round trips. Bounded by the grant's own short life.
+const verifiedGrants = new Map(); // token -> expiry ms
+
+// Authorize an /admin call (#74).
+//
+// Preferred: a session-scoped grant minted by serve. The hand cannot check the
+// HMAC itself — that needs the signing key, and keeping that key out of a
+// sandbox running model-written code is the entire point — so it asks serve,
+// exactly as it already does for credentials.
+//
+// The returned session is compared against this hand's OWN identity, so a grant
+// lifted out of one session's hand does not authorize another's. That is the
+// property HAND_ADMIN_TOKEN never had: one static secret mounted into every
+// hand, where reading it anywhere authorized /admin everywhere.
+//
+// SERVE_BASE comes from the environment, never from the request — taking it
+// from the caller would let an attacker point verification at a server of their
+// own choosing and mint their own approval.
+async function adminAuthed(req) {
   const h = req.headers["authorization"] || "";
-  return h === `Bearer ${ADMIN_TOKEN}`;
+  const tok = h.startsWith("Bearer ") ? h.slice(7) : "";
+  if (!tok) return !ADMIN_TOKEN; // no credential: only the dev-mode open case
+
+  const cached = verifiedGrants.get(tok);
+  if (cached && cached > Date.now()) return true;
+
+  // A grant is `<base64>.<sig>`; anything else can only be the legacy token.
+  if (tok.includes(".")) {
+    try {
+      const r = await fetch(`${SERVE_BASE}/v1/hand/admin-verify`, {
+        headers: { Authorization: `Bearer ${tok}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) return false;
+      const { session } = await r.json();
+      // Bind the grant to this hand. SESSION_ID is latched from the Host header
+      // atenet routed on, so it is this actor's own identity, not the caller's
+      // claim about it.
+      if (!session || (SESSION_ID && session !== SESSION_ID)) {
+        console.error(`admin: grant is for ${session}, this hand is ${SESSION_ID} — refused`);
+        return false;
+      }
+      verifiedGrants.set(tok, Date.now() + 60_000);
+      return true;
+    } catch (e) {
+      // Fail CLOSED: an unreachable serve must not mean "allow".
+      console.error(`admin: cannot verify grant (${e.message}) — refused`);
+      return false;
+    }
+  }
+
+  // Legacy shared token, kept only so a deployment without a grant signing key
+  // keeps working. Remove once AGENTPLANE_GRANT_KEY is set everywhere.
+  return ADMIN_TOKEN !== "" && tok === ADMIN_TOKEN;
 }
 
 async function readJson(req) {
@@ -357,7 +411,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith("/admin/")) {
-    if (!adminAuthed(req)) { res.writeHead(401); return res.end("unauthorized"); }
+    if (!(await adminAuthed(req))) { res.writeHead(401); return res.end("unauthorized"); }
     try {
       if (url.pathname === "/admin/upstreams" && req.method === "POST") return await handleAdminUpstreams(req, res);
       if (url.pathname === "/admin/repositories" && req.method === "POST") return await handleAdminRepositories(req, res);

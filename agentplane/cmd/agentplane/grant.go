@@ -46,13 +46,57 @@ type grantClaims struct {
 	User  string   `json:"user"`
 	Names []string `json:"names"`
 	Exp   int64    `json:"exp"`
+	// Admin authorizes the hand's own /admin routes for THIS session (#74).
+	// Deliberately a separate claim rather than a reserved entry in Names: a
+	// credential grant must never be replayable as an admin grant.
+	Admin bool `json:"admin,omitempty"`
 }
 
-func (s *server) signGrant(payload []byte) string {
-	mac := hmac.New(sha256.New, s.grantKey)
+// adminGrantTTL is shorter than grantTTL. An admin grant is used within seconds
+// of being minted — session setup, or a wake — so a long life buys nothing and
+// widens the window in which one read out of a hand is still useful.
+const adminGrantTTL = 2 * time.Minute
+
+func signWithKey(key, payload []byte) string {
+	mac := hmac.New(sha256.New, key)
 	mac.Write(payload)
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
+
+// mintAdminGrant authorizes /admin on ONE session's hand.
+//
+// Package-level rather than a method because the callers (postHandAdmin,
+// injectHandUpstreams, pushHandIdentity) hold a sessionCtx, not the server —
+// and the signing key comes from the same env var either way.
+//
+// This replaces HAND_ADMIN_TOKEN, which was one static secret mounted into
+// every hand: reading it in any session authorized /admin on all of them.
+// A grant is scoped to one session and expires in minutes.
+func mintAdminGrant(sid string) string {
+	key := grantSigningKey()
+	if len(key) == 0 {
+		return "" // grants disabled — callers fall back, see adminAuthHeader
+	}
+	c := grantClaims{Sid: sid, Admin: true, Exp: time.Now().Add(adminGrantTTL).Unix()}
+	payload, _ := json.Marshal(c)
+	b64 := base64.RawURLEncoding.EncodeToString(payload)
+	return b64 + "." + signWithKey(key, []byte(b64))
+}
+
+// adminAuthHeader is what serve sends on a hand /admin call: a session-scoped
+// grant when signing is configured, else the legacy shared token so an
+// un-upgraded deployment keeps working.
+func adminAuthHeader(sid string) string {
+	if g := mintAdminGrant(sid); g != "" {
+		return "Bearer " + g
+	}
+	if t := env("HAND_ADMIN_TOKEN", ""); t != "" {
+		return "Bearer " + t
+	}
+	return ""
+}
+
+func (s *server) signGrant(payload []byte) string { return signWithKey(s.grantKey, payload) }
 
 // mintGrant returns a signed token authorizing `names` for this session's user.
 func (s *server) mintGrant(sid, user string, names []string, ttl time.Duration) string {
@@ -85,6 +129,26 @@ func (s *server) verifyGrant(token string) (grantClaims, bool) {
 		return c, false
 	}
 	return c, true
+}
+
+// handleHandAdminVerify is called by the HAND to check an admin grant it was
+// presented (#74). The hand cannot verify the HMAC itself — that would need the
+// signing key, which is the whole thing we are keeping out of the sandbox — so
+// it asks serve, exactly as it already does for credentials.
+//
+// Returns the session the grant is for. The hand compares that against its OWN
+// identity and rejects a mismatch, so a grant lifted from one session's hand
+// does not authorize another's. NOT wrapped in s.auth — the grant IS the auth.
+func (s *server) handleHandAdminVerify(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	claims, ok := s.verifyGrant(tok)
+	if !ok || !claims.Admin {
+		// Same answer for a bad signature, an expired grant and a credential
+		// grant replayed here — none of them should learn which they were.
+		writeErr(w, http.StatusUnauthorized, "invalid or expired admin grant")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"session": claims.Sid})
 }
 
 // handleHandCredPull is called by the HAND (not a user): it presents its grant
