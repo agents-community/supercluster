@@ -232,6 +232,7 @@ func runServe(args []string) {
 	// Hand-pull: the HAND presents its session grant (not a user token) to fetch
 	// a credential value. Grant-authed inside the handler, so NOT wrapped in auth.
 	mux.HandleFunc("GET /v1/hand/credentials/{name}", s.handleHandCredPull)
+	mux.HandleFunc("GET /v1/hand/admin-verify", s.handleHandAdminVerify)
 	// Talk to a session: POST a message, GET /message/stream to watch it work
 	// (assistant text + tool activity, harness-neutral). GET /message is history.
 	mux.HandleFunc("POST /v1/sessions/{id}/message", s.auth(s.handleSend))

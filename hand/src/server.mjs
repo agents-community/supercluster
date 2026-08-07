@@ -32,7 +32,9 @@ const tracer = trace.getTracer("agentplane-hand");
 
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
-const ADMIN_TOKEN = process.env.HAND_ADMIN_TOKEN || ""; // gate /admin; empty = open (dev)
+// Where to verify admin grants. From the ENVIRONMENT, never the request body —
+// a caller-supplied verification endpoint would be no check at all.
+const SERVE_BASE = process.env.AGENTPLANE_SERVE_BASE || "http://agentplane-serve.agentplane.svc:7433";
 mkdirSync(WORKDIR, { recursive: true });
 
 // A hand actor serves exactly one session for its whole life, and atenet
@@ -306,10 +308,63 @@ function buildServer() {
 
 // ---- admin (control) plane: serve injects upstreams + credentials here -------
 
-function adminAuthed(req) {
-  if (!ADMIN_TOKEN) return true; // open in dev; set HAND_ADMIN_TOKEN in prod
+// Grants verified recently, so a burst of admin calls at session setup does not
+// become a burst of round trips. Bounded by the grant's own short life.
+const verifiedGrants = new Map(); // token -> expiry ms
+
+// Authorize an /admin call (#74).
+//
+// A session-scoped grant minted by serve is the ONLY way in. The hand cannot check the
+// HMAC itself — that needs the signing key, and keeping that key out of a
+// sandbox running model-written code is the entire point — so it asks serve,
+// exactly as it already does for credentials.
+//
+// The returned session is compared against this hand's OWN identity, so a grant
+// lifted out of one session's hand does not authorize another's.
+//
+// There is deliberately no static-token fallback and no open dev mode. The old
+// HAND_ADMIN_TOKEN was one secret mounted into every hand, and it stayed usable
+// even after the environment scrub because tools run as root in this container
+// and could read it out of /proc/1/environ. Accepting it here would have kept
+// that path open regardless of the grant work, so it is gone — and the token is
+// no longer mounted into the hand at all.
+//
+// SERVE_BASE comes from the environment, never from the request — taking it
+// from the caller would let an attacker point verification at a server of their
+// own choosing and mint their own approval.
+async function adminAuthed(req) {
   const h = req.headers["authorization"] || "";
-  return h === `Bearer ${ADMIN_TOKEN}`;
+  const tok = h.startsWith("Bearer ") ? h.slice(7) : "";
+  if (!tok) return false; // no credential, no access — there is no open mode
+
+  const cached = verifiedGrants.get(tok);
+  if (cached && cached > Date.now()) return true;
+
+  {
+    try {
+      const r = await fetch(`${SERVE_BASE}/v1/hand/admin-verify`, {
+        headers: { Authorization: `Bearer ${tok}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) return false;
+      const { session } = await r.json();
+      // Bind the grant to this hand. SESSION_ID is latched from the Host header
+      // atenet routed on, so it is this actor's own identity, not the caller's
+      // claim about it.
+      if (!session || (SESSION_ID && session !== SESSION_ID)) {
+        console.error(`admin: grant is for ${session}, this hand is ${SESSION_ID} — refused`);
+        return false;
+      }
+      verifiedGrants.set(tok, Date.now() + 60_000);
+      return true;
+    } catch (e) {
+      // Fail CLOSED: an unreachable serve must not mean "allow".
+      console.error(`admin: cannot verify grant (${e.message}) — refused`);
+      return false;
+    }
+  }
+
+  return false;
 }
 
 async function readJson(req) {
@@ -357,7 +412,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith("/admin/")) {
-    if (!adminAuthed(req)) { res.writeHead(401); return res.end("unauthorized"); }
+    if (!(await adminAuthed(req))) { res.writeHead(401); return res.end("unauthorized"); }
     try {
       if (url.pathname === "/admin/upstreams" && req.method === "POST") return await handleAdminUpstreams(req, res);
       if (url.pathname === "/admin/repositories" && req.method === "POST") return await handleAdminRepositories(req, res);
