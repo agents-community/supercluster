@@ -34,14 +34,21 @@ ENV GIT_TERMINAL_PROMPT=0
 WORKDIR /app
 # No package.json and no npm install: the executor uses only the node stdlib.
 # Every dependency is a dependency of the process running untrusted input.
-COPY server.mjs /app/server.mjs
+COPY executor.mjs /app/executor.mjs
 
 ENV EXEC_PORT=8081
 ENV HAND_WORKDIR=/workspace
 
-# Runs as root, and that is not the end state — an agent can still write to
-# /app here. It is not addressed in this change because /workspace is a
-# Substrate DurableDir owned by root, and a non-root executor cannot write to
-# the workspace that is the entire point of the hand. Fixing that needs the
-# mount's ownership handled first; tracked on #74.
-ENTRYPOINT ["node", "/app/server.mjs"]
+# Runs as root. Not a choice — gVisor refuses every privilege-drop route
+# (spawnSync uid -> EPERM, setpriv -> setresuid EPERM, su -> cannot set
+# groups), and /workspace arrives root:root 0700 so a non-root process cannot
+# enter it. EXEC_UID stays 0 until Substrate can create the DurableDir owned by
+# a non-root uid; see #74.
+#
+# The blast radius is this container: no credentials live here, and the gateway
+# is a separate rootfs. An agent rewriting this image affects its own session
+# and nothing else.
+ENV EXEC_UID=0
+ENV EXEC_HOME=/root
+
+ENTRYPOINT ["node", "/app/executor.mjs"]

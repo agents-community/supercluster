@@ -19,6 +19,11 @@
 //   * the gateway reaches us on loopback; nothing outside the actor can, because
 //     atenet routes only to the actor's :80, which is the gateway.
 //
+// Named executor.mjs, not server.mjs, on purpose. The gateway has a server.mjs
+// too, and `ls /app` is the first thing anyone runs to work out where they are —
+// a listing that says "server.mjs" answers that question wrongly in whichever
+// container you are not thinking of.
+//
 // Deliberately tiny and dependency-free: this is the process running untrusted
 // input, so its own attack surface should be about as small as a program can be.
 
@@ -26,7 +31,7 @@ import http from "node:http";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, globSync,
+  appendFileSync, chownSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, globSync,
 } from "node:fs";
 
 const PORT = Number(process.env.EXEC_PORT || 8081);
@@ -37,7 +42,37 @@ const HOST = process.env.EXEC_HOST || "127.0.0.1";
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
 const MAX_OUTPUT = 10 * 1024 * 1024;
 
+// Commands run as ROOT, and that cannot currently be changed. gVisor refuses
+// every privilege-drop route, verified inside a live actor:
+//
+//   spawnSync({uid})            -> EPERM
+//   setpriv --reuid=1000        -> setresuid failed: Operation not permitted
+//   su -s /bin/sh node          -> cannot set groups: Operation not permitted
+//
+// And starting the container non-root does not work either: /workspace is a
+// DurableDir that arrives root:root 0700, so an unprivileged process cannot
+// even enter it, and nothing unprivileged can chown it.
+//
+// What this costs: an agent can rewrite this file, and the actor snapshot
+// persists that for the session's life. What it does NOT cost: the gateway's
+// credentials, its source, or any other session — those are in a different
+// container, which is the boundary the split actually buys. Tracked on #74;
+// closing it needs Substrate to create the DurableDir owned by a non-root uid.
+const EXEC_UID = Number(process.env.EXEC_UID || 0);
+const EXEC_GID = Number(process.env.EXEC_GID || 0);
+const EXEC_HOME = process.env.EXEC_HOME || "/root";
+
 mkdirSync(WORKDIR, { recursive: true });
+// The DurableDir arrives root-owned, so hand it to the command user once. Only
+// the top level is chowned recursively at boot; a large restored workspace
+// would make this slow, and everything inside was written by the same uid.
+if (EXEC_UID > 0) {
+  try {
+    spawnSync("chown", ["-R", `${EXEC_UID}:${EXEC_GID}`, WORKDIR], { timeout: 60000 });
+  } catch (e) {
+    console.error(`could not chown ${WORKDIR}: ${e.message} — writes may fail`);
+  }
+}
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -76,6 +111,16 @@ function resolveInWorkdir(p) {
 // executor owns the workspace outright. That is the stronger arrangement
 // anyway: the process holding the session's credentials never touches the
 // filesystem the model can write to.
+// Files created by the fs tools must belong to the command user, or `write`
+// then `bash` disagree: the tool succeeds as root and the shell then cannot
+// modify what it just made.
+function own(p) {
+  if (EXEC_UID > 0) {
+    try { chownSync(p, EXEC_UID, EXEC_GID); } catch { /* best-effort */ }
+  }
+  return p;
+}
+
 function fsOp(op, a) {
   switch (op) {
     case "read":
@@ -83,13 +128,17 @@ function fsOp(op, a) {
     case "write": {
       const abs = resolveInWorkdir(a.path);
       mkdirSync(path.dirname(abs), { recursive: true });
+      own(path.dirname(abs));
       writeFileSync(abs, a.content ?? "");
+      own(abs);
       return { path: abs, bytes: Buffer.byteLength(a.content ?? "") };
     }
     case "append": {
       const abs = resolveInWorkdir(a.path);
       mkdirSync(path.dirname(abs), { recursive: true });
+      own(path.dirname(abs));
       appendFileSync(abs, a.content ?? "");
+      own(abs);
       return { path: abs };
     }
     case "list": {
@@ -120,6 +169,7 @@ function run(argv, { cwd, timeoutMs, env }) {
   const runCwd = resolveInWorkdir(cwd || ".");
   const r = spawnSync(cmd, args, {
     cwd: runCwd,
+    ...(EXEC_UID > 0 ? { uid: EXEC_UID, gid: EXEC_GID } : {}),
     encoding: "utf8",
     timeout: timeoutMs || 120000,
     maxBuffer: MAX_OUTPUT,
@@ -128,7 +178,7 @@ function run(argv, { cwd, timeoutMs, env }) {
     // here later cannot silently reach a command.
     env: {
       PATH: process.env.PATH,
-      HOME: process.env.HOME,
+      HOME: EXEC_HOME,
       PWD: runCwd,
       ...(process.env.VIRTUAL_ENV ? { VIRTUAL_ENV: process.env.VIRTUAL_ENV } : {}),
       ...(process.env.GIT_TERMINAL_PROMPT ? { GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT } : {}),
