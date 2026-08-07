@@ -10,9 +10,32 @@
 // a cold resume (the BYO-key tradeoff), and purged when the session is deleted.
 
 import { writeFileSync, existsSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { execRun } from "./exec-client.mjs";
+
+// git runs in the EXECUTOR, not here (#74). `git config --global` writes a
+// gitconfig in whichever container runs it, and clones write into /workspace —
+// which after the split only the executor mounts. Running these locally would
+// configure a container that never runs git and clone into a directory that
+// does not exist.
+async function git(args, opts = {}) {
+  try {
+    const r = await execRun(["git", ...args], { timeoutMs: opts.timeoutMs ?? 60000, cwd: opts.cwd });
+    return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
+  } catch (e) {
+    return { status: 1, stdout: "", stderr: e.message };
+  }
+}
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
+// Environment variables the agent DECLARED and is meant to have: credentials
+// of `type: env`. These are forwarded to the executor per request; nothing else
+// from this process's environment is.
+//
+// Kept as an explicit set rather than a prefix convention so that adding a
+// secret to the gateway's own environment later cannot accidentally reach the
+// code the model writes.
+export const exposedToTools = new Set();
 
 // name -> { url, headers, client, tools: [{ name, description, inputSchema }] }
 const upstreams = new Map();
@@ -98,9 +121,14 @@ export async function pullCredentials({ serveBase, grant, credentials }) {
         applied.push({ name, ok: true, type: "git", host: p.host || "github.com" });
       } else if (p.type === "env" && p.varName) {
         process.env[p.varName] = p.value;
+        exposedToTools.add(p.varName); // declared by the agent — goes to the executor
         applied.push({ name, ok: true, type: "env", var: p.varName });
       } else if (p.type === "header") {
-        process.env[`HAND_CRED_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`] = p.value;
+        {
+          const varName = `HAND_CRED_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+          process.env[varName] = p.value;
+          exposedToTools.add(varName); // declared by the agent — goes to the executor
+        }
         applied.push({ name, ok: true, type: "header" });
       } else {
         applied.push({ name, ok: false, reason: `unsupported type ${p.type}` });
@@ -116,7 +144,7 @@ export async function pullCredentials({ serveBase, grant, credentials }) {
 // $HOME/.git-credentials (mode 0600) — OUTSIDE /workspace, so the token is not
 // part of the durable workspace checkpoint. git's `store` helper reads it; the
 // token never appears in a command line (so it never reaches the LLM/event log).
-export function setGitCredentials(creds) {
+export async function setGitCredentials(creds) {
   if (!Array.isArray(creds) || creds.length === 0) return 0;
   const home = process.env.HOME || "/root";
   const lines = creds.map((c) => {
@@ -126,11 +154,11 @@ export function setGitCredentials(creds) {
     return `https://${user}:${tok}@${host}`;
   });
   writeFileSync(`${home}/.git-credentials`, lines.join("\n") + "\n", { mode: 0o600 });
-  spawnSync("git", ["config", "--global", "credential.helper", "store"]);
+  await git(["config", "--global", "credential.helper", "store"]);
   // A sane default identity so `git commit` works without extra setup.
-  if (!spawnSync("git", ["config", "--global", "user.email"]).stdout?.length) {
-    spawnSync("git", ["config", "--global", "user.email", "agent@agentplane.local"]);
-    spawnSync("git", ["config", "--global", "user.name", "agentplane"]);
+  if (!await git(["config", "--global", "user.email"]).stdout?.length) {
+    await git(["config", "--global", "user.email", "agent@agentplane.local"]);
+    await git(["config", "--global", "user.name", "agentplane"]);
   }
   return creds.length;
 }
@@ -141,7 +169,7 @@ export function setGitCredentials(creds) {
 // attached OUTSIDE this sandbox. Nothing secret is written here: the grant is
 // short-lived and scoped to this session's declared credentials, and the real
 // token never arrives.
-export function configureGitProxy({ proxyBase, grant, credential }) {
+export async function configureGitProxy({ proxyBase, grant, credential }) {
   if (!proxyBase) return false;
   // Never prompt. Without this, a 401 makes git block asking for a username
   // that no one can type, and the clone fails with a message about terminals
@@ -150,26 +178,25 @@ export function configureGitProxy({ proxyBase, grant, credential }) {
   // The proxy authenticates on our behalf, so git must not go looking for
   // credentials for the proxy host itself: `credential.helper store` (set by
   // the legacy pull path) would otherwise try, find none, and prompt.
-  spawnSync("git", ["config", "--global", `credential.${proxyBase.replace(/\/$/, "")}.helper`, ""]);
+  await git(["config", "--global", `credential.${proxyBase.replace(/\/$/, "")}.helper`, ""]);
   // insteadOf rewrites https://github.com/... to the proxy, so the URL the
   // model sees and types stays the normal public one.
-  spawnSync("git", ["config", "--global", `url.${proxyBase.replace(/\/$/, "")}/gh/.insteadOf`,
+  await git(["config", "--global", `url.${proxyBase.replace(/\/$/, "")}/gh/.insteadOf`,
     "https://github.com/"]);
   // extraHeader travels with every git HTTP request; the proxy reads it to
   // decide whose credential to attach, then strips it before calling upstream.
-  spawnSync("git", ["config", "--global", "--unset-all", "http.extraHeader"]);
+  await git(["config", "--global", "--unset-all", "http.extraHeader"]);
   if (grant) {
-    spawnSync("git", ["config", "--global", "--add", "http.extraHeader",
+    await git(["config", "--global", "--add", "http.extraHeader",
       `X-Agentplane-Grant: ${grant}`]);
   }
   if (credential) {
-    spawnSync("git", ["config", "--global", "--add", "http.extraHeader",
+    await git(["config", "--global", "--add", "http.extraHeader",
       `X-Agentplane-Credential: ${credential}`]);
   }
-  // Verify rather than assume: spawnSync failures are silent, and a config that
+  // Verify rather than assume: a failed git config is silent, and a config that
   // did not apply looks identical to one that did until a clone fails oddly.
-  const check = spawnSync("git", ["config", "--global", "--get-regexp", "^url\\."],
-    { encoding: "utf8" });
+    const check = await git(["config", "--global", "--get-regexp", "^url\\."]);
   const applied = (check.stdout || "").includes(proxyBase.replace(/\/$/, ""));
   if (!applied) {
     console.error("git proxy config did NOT apply:", (check.stderr || check.stdout || "").slice(0, 200));
@@ -180,7 +207,7 @@ export function configureGitProxy({ proxyBase, grant, credential }) {
 // Clone the agent's declared repositories into the sandbox. Idempotent: an
 // existing checkout is left alone, because /workspace is durable and a session
 // resuming after a suspend must not lose uncommitted work.
-export function cloneRepositories(repos) {
+export async function cloneRepositories(repos) {
   const out = [];
   for (const r of repos || []) {
     const dest = r.mountPath;
@@ -200,10 +227,9 @@ export function cloneRepositories(repos) {
     else if (r.checkout?.tag) args.push("--branch", r.checkout.tag);
     args.push(r.url, dest);
 
-    const res = spawnSync("git", args, {
-      encoding: "utf8", timeout: 10 * 60 * 1000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    });
+      // 10 minutes: a large repository over the proxy is slow, and a clone
+      // killed halfway leaves a partial checkout that looks like a bad repo.
+      const res = await git(args, { timeoutMs: 10 * 60 * 1000 });
     if (res.status !== 0) {
       // stderr can contain a URL; it never contains the token, which lives only
       // in the proxy. Truncated so a huge git error cannot flood the log.
@@ -211,7 +237,7 @@ export function cloneRepositories(repos) {
       continue;
     }
     if (r.checkout?.commit) {
-      const co = spawnSync("git", ["-C", dest, "checkout", r.checkout.commit], { encoding: "utf8" });
+      const co = await git(["-C", dest, "checkout", r.checkout.commit]);
       if (co.status !== 0) {
         out.push({ url: r.url, ok: false, error: `checkout ${r.checkout.commit}: ${(co.stderr || "").trim().slice(0, 200)}` });
         continue;

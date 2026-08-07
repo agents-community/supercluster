@@ -12,8 +12,6 @@
 // credentials live in this process's memory (see gateway.mjs).
 
 import http from "node:http";
-import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, globSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -22,20 +20,30 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import {
   connectUpstream, removeUpstream, federatedTools, resolveFederated,
   callFederated, setGitCredentials, upstreamStatus, pullCredentials,
-  configureGitProxy, cloneRepositories,
+  configureGitProxy, cloneRepositories, exposedToTools,
 } from "./gateway.mjs";
+import { execRun, execFs, execReady } from "./exec-client.mjs";
 import { initOtel } from "./otel.mjs";
 import { trace, context, propagation, SpanStatusCode } from "@opentelemetry/api";
 
 initOtel(); // start tracing before anything runs (no-op if OTEL endpoint unset)
 const tracer = trace.getTracer("agentplane-hand");
 
+// Credentials the agent DECLARED travel per request, so the executor never
+// holds them between calls and they never enter its standing environment.
+function declaredEnv() {
+  const out = {};
+  for (const k of exposedToTools) {
+    if (process.env[k] !== undefined) out[k] = process.env[k];
+  }
+  return out;
+}
+
 const PORT = Number(process.env.PORT || 8080);
 const WORKDIR = process.env.HAND_WORKDIR || "/workspace";
 // Where to verify admin grants. From the ENVIRONMENT, never the request body —
 // a caller-supplied verification endpoint would be no check at all.
 const SERVE_BASE = process.env.AGENTPLANE_SERVE_BASE || "http://agentplane-serve.agentplane.svc:7433";
-mkdirSync(WORKDIR, { recursive: true });
 
 // A hand actor serves exactly one session for its whole life, and atenet
 // routes to it by actor name — so the first request's Host header IS our
@@ -88,7 +96,10 @@ function argsHash(name, args) {
 }
 function journalLine(obj) {
   const line = JSON.stringify(obj);
-  try { appendFileSync(JOURNAL(), line + "\n"); } catch { /* journal is best-effort */ }
+  // The journal lives in /workspace, which only the executor mounts now.
+  // Fire-and-forget, as before: an audit convenience must never fail a tool.
+  execFs("append", { path: ".hand-journal.jsonl", content: line + "\n" })
+    .catch(() => { /* journal is best-effort */ });
   // Mirror to stdout: the workspace copy dies with the session, but actor
   // stdout lands in Cloud Logging (labeled ate.dev/actor_name) and OUTLIVES
   // it — that's the operator audit trail. Deliberate privacy trade: unlike
@@ -120,13 +131,6 @@ function journalEnd(name, args, result, ms) {
 
 // Resolve a caller-supplied path inside the workspace (absolute paths under
 // /workspace are honored; relative ones resolve against it). Refuses escapes.
-function resolveInWorkdir(p) {
-  const abs = path.resolve(WORKDIR, p || ".");
-  if (abs !== WORKDIR && !abs.startsWith(WORKDIR + path.sep)) {
-    throw new Error(`path escapes the workspace: ${p}`);
-  }
-  return abs;
-}
 
 const ok = (text) => ({ content: [{ type: "text", text }] });
 const errResult = (text) => ({ content: [{ type: "text", text }], isError: true });
@@ -181,54 +185,56 @@ const OWN_TOOLS = [
 ];
 const OWN_NAMES = new Set(OWN_TOOLS.map((t) => t.name));
 
-function runOwnTool(name, args) {
+async function runOwnTool(name, args) {
   switch (name) {
     case "bash": {
-      const r = spawnSync("sh", ["-c", args.command], {
-        cwd: WORKDIR, encoding: "utf8", timeout: 120000, maxBuffer: 10 * 1024 * 1024,
-      });
-      if (r.error) return errResult(`failed to run: ${r.error.message}`);
-      const body = (r.stdout || "") + (r.stderr || "");
-      return { content: [{ type: "text", text: `exit ${r.status}\n${body}` }], isError: r.status !== 0 };
+        let r;
+        try {
+          r = await execRun(["sh", "-c", args.command], { cwd: ".", timeoutMs: 120000, env: declaredEnv() });
+        } catch (e) {
+          // Fail closed and say so. Falling back to running it here would
+          // restore precisely the arrangement this replaced.
+          return errResult(`executor unavailable: ${e.message}`);
+        }
+        const body = (r.stdout || "") + (r.stderr || "");
+        return { content: [{ type: "text", text: `exit ${r.status}\n${body}` }], isError: r.status !== 0 };
     }
     case "write": {
-      const abs = resolveInWorkdir(args.path);
-      mkdirSync(path.dirname(abs), { recursive: true });
-      writeFileSync(abs, args.content);
-      return ok(`wrote ${abs} (${Buffer.byteLength(args.content)} bytes)`);
+      const w = await execFs("write", { path: args.path, content: args.content });
+      return ok(`wrote ${w.path} (${w.bytes} bytes)`);
     }
     case "read":
-      return ok(readFileSync(resolveInWorkdir(args.path), "utf8"));
+      return ok((await execFs("read", { path: args.path })).text);
     case "list": {
-      const abs = resolveInWorkdir(args.path ?? ".");
-      const entries = readdirSync(abs).map((n) => {
-        const st = statSync(path.join(abs, n));
-        return `${st.isDirectory() ? "d" : "-"} ${n}`;
-      });
-      return ok(entries.length ? entries.join("\n") : "(empty)");
+      const { entries } = await execFs("list", { path: args.path ?? "." });
+      const lines = entries.map((e) => `${e.dir ? "d" : "-"} ${e.name}`);
+      return ok(lines.length ? lines.join("\n") : "(empty)");
     }
     case "edit": {
-      const abs = resolveInWorkdir(args.path);
-      const content = readFileSync(abs, "utf8");
+      const content = (await execFs("read", { path: args.path })).text;
       const { old_string, new_string, replace_all } = args;
       const count = content.split(old_string).length - 1;
       if (count === 0) return errResult(`old_string not found in ${args.path}`);
       if (count > 1 && !replace_all) return errResult(`old_string is not unique (${count} matches) — add surrounding context or set replace_all`);
       const out = replace_all ? content.split(old_string).join(new_string) : content.replace(old_string, new_string);
-      writeFileSync(abs, out);
-      return ok(`edited ${abs} (${count} replacement${count === 1 ? "" : "s"})`);
+      const w = await execFs("write", { path: args.path, content: out });
+      return ok(`edited ${w.path} (${count} replacement${count === 1 ? "" : "s"})`);
     }
     case "glob": {
-      const base = resolveInWorkdir(args.path ?? ".");
-      const matches = [...globSync(args.pattern, { cwd: base })];
+      const { matches } = await execFs("glob", { path: args.path ?? ".", pattern: args.pattern });
       return ok(matches.length ? matches.join("\n") : "(no matches)");
     }
     case "grep": {
-      const base = resolveInWorkdir(args.path ?? ".");
+      const base = args.path ?? ".";
       const gargs = ["-rnE"];
       if (args.glob) gargs.push(`--include=${args.glob}`);
       gargs.push(args.pattern, ".");
-      const r = spawnSync("grep", gargs, { cwd: base, encoding: "utf8", timeout: 60000, maxBuffer: 5 * 1024 * 1024 });
+      let r;
+      try {
+        r = await execRun(["grep", ...gargs], { cwd: base, timeoutMs: 60000, env: declaredEnv() });
+      } catch (e) {
+        return errResult(`executor unavailable: ${e.message}`);
+      }
       if (r.status === 0) return ok(r.stdout || "(no output)");
       if (r.status === 1) return ok("(no matches)");
       return errResult(r.stderr || `grep exited ${r.status}`);
@@ -273,7 +279,7 @@ function buildServer() {
       const t0 = Date.now();
       try {
         let r;
-        if (OWN_NAMES.has(name)) r = runOwnTool(name, args);
+        if (OWN_NAMES.has(name)) r = await runOwnTool(name, args);
         else if (resolveFederated(name)) r = await callFederated(name, args);
         else r = errResult(`unknown tool: ${name}`);
         span.setAttribute("hand.tool.is_error", !!r.isError);
@@ -383,7 +389,7 @@ async function handleAdminUpstreams(req, res) {
     const tools = await connectUpstream(u);
     registered.push({ name: u.name, tools });
   }
-  const gitCount = setGitCredentials(body.gitCredentials || []);
+  const gitCount = await setGitCredentials(body.gitCredentials || []);
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ ok: true, registered, gitCredentials: gitCount }));
 }
@@ -395,10 +401,10 @@ async function handleAdminUpstreams(req, res) {
 // Body: { proxyBase, grant, credential, repositories: [{url,mountPath,checkout}] }
 async function handleAdminRepositories(req, res) {
   const body = await readJson(req);
-  const proxied = configureGitProxy({
+  const proxied = await configureGitProxy({
     proxyBase: body.proxyBase, grant: body.grant, credential: body.credential,
   });
-  const cloned = cloneRepositories(body.repositories || []);
+  const cloned = await cloneRepositories(body.repositories || []);
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ ok: true, proxied, cloned }));
 }

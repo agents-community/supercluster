@@ -12,18 +12,25 @@ serve -> net : POST /admin/upstreams {mcp servers + headers}
 net -> hand : (federates user's MCP servers, with credentials)
 serve -> net : POST /admin/grant {grant, names}
 net -> hand : (hand then pulls values — see seq-vault-grant)
-hand -> hand : adminAuthed(): compare Bearer to HAND_ADMIN_TOKEN
+hand -> serve : GET /v1/hand/admin-verify (Bearer <grant>)
+serve -> hand : {session: sess-<sid>}
+hand -> hand : adminAuthed(): grant valid AND session == own latched identity
 
-note over hand, other #FFE4E4
-  The token is <b>the same in every hand</b> (one Secret, mounted everywhere)
-  and it is <b>also the grant-signing key</b> (serve.go:174).
-  Substrate NetworkPolicies now block <b>inbound</b> actor-to-actor traffic,
-  but <b>egress is unrestricted (F5)</b> — so model-generated code in one hand
-  can still initiate:
-   1. read its own env → obtain the token,
-   2. reach h-<other> directly → drive another session's admin plane,
-   3. sign its own grants → pull ANY user's vault credentials.
-  Fix: separate keys + per-session tokens + ActorIdentity binding.
+note over hand, other #E4F7E4
+  <b>FIXED (F3, F14).</b> /admin takes a <b>session-scoped HMAC grant</b> with a
+  2-minute TTL, verified against serve and bound to this hand's own identity.
+  HAND_ADMIN_TOKEN is <b>no longer mounted into the hand at all</b>.
+  Verified live: legacy token -> 401 (was 200); a forged grant naming
+  another session -> 401.
+
+  Model-written code also no longer runs in this container: commands and
+  filesystem work happen in a second <b>executor</b> container with its own
+  rootfs, its own PID namespace and no credentials (F14).
+
+  Remaining: the binding is serve's claim compared to a Host-derived name,
+  not cryptographic actor identity. <b>ActorIdentity mTLS is the endgame.</b>
+  Egress is still unrestricted (F9), so reachability is not the control —
+  having nothing worth stealing is.
 end note
-hand -[#CC0000]-> other : lateral movement (possible today)
+hand -[#2E7D32]-> other : lateral movement (a grant for h-<sid> is refused by h-<other>)
 @enduml

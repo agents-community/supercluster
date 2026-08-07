@@ -90,6 +90,12 @@ attacking, drawn as deployed rather than as designed.
    `AGENTPLANE_ATEAPI_CA` when set and warns loudly when not; **the deployment does
    not set it**, so verification is off in practice (F10)
 4. **worker ↔ actor** — gVisor sandbox: *the* boundary against model-generated code
+4a. **gateway ↔ executor, inside the hand actor** — two containers in one sandbox.
+   gVisor protects the host and every other actor from a tool; it says nothing
+   about the hand's own secrets, which used to sit in the same container as the
+   shell. The executor now has its own rootfs, its own PID namespace and no
+   credentials; it owns `/workspace` outright because gVisor refuses one
+   DurableDir mounted into two containers. They share only the network namespace
 5. **actor ↔ actor / actor ↔ serve** — atenet (Envoy), Host-header routed.
    Substrate now ships per-pool NetworkPolicies (`substrate-brain-pool-*`,
    `substrate-hand-pool-*`) — **`policyTypes: [Ingress]` only**, admitting just
@@ -114,10 +120,61 @@ that the control exists and where it stops.
 | | Was | Now | Still not covered |
 |---|---|---|---|
 | **F1** CRITICAL | any token read, wrote and deleted any session; list showed all sessions cluster-wide | `ownedSession()` gates every session route and answers **404, not 403** so ids can't be enumerated; list filtered by owner; ownership in Firestore, claims create-only | — |
-| **F3** HIGH | the grant-signing key *was* `HAND_ADMIN_TOKEN`, mounted in every hand, so one compromised hand could forge grants for any user | separate secrets: `AGENTPLANE_GRANT_KEY` in serve only, `agentplane-hand-admin` in hands (verified distinct on the deployment) | the hand admin token is still **one value shared by every hand**, and grants aren't bound to the presenting actor — `ActorIdentity` mTLS remains the endgame |
+| **F3** HIGH | the grant-signing key *was* `HAND_ADMIN_TOKEN`, mounted in every hand, so one compromised hand could forge grants for any user | separate secrets, then the shared token removed entirely: `/admin` takes a **session-scoped HMAC grant** (2-min TTL) that the hand verifies against serve and binds to its own latched identity. `HAND_ADMIN_TOKEN` is no longer mounted into the hand at all. Verified live: legacy token → 401 (was 200), forged grant for another session → 401 | grants still aren't bound by *cryptographic* actor identity — the binding is serve's claim compared against the hand's Host-derived name. `ActorIdentity` mTLS remains the endgame |
 | **F4** HIGH | 30-day grant TTL, no revocation | `grantTTL = 10 * time.Minute`; the hand pulls once at setup, so a leaked grant dies in minutes | revocation still absent by design — bounded by the TTL, now an accepted risk |
 | **F7** MEDIUM | `/v1/access` unthrottled — an allowlisted address could be ground through at speed | `accessLimiter`: 10/min per IP, 5/min per email | **email is still a single factor** and the endpoint is idempotent, so anyone who learns an address gets that user's token. The allowlist is a convenience for a closed tester group, not authentication |
 | **F8** MEDIUM | `agentplane-cred-<user>-<name>` — `(a, b-c)` collided with `(a-b, c)`; emails put `.`/`@` in the id | `vault.secretID()` hashes the user to a fixed-width prefix | — |
+
+### F14 — HIGH — **FIXED** — The hand ran untrusted code beside its own credentials
+
+Model-written commands executed in the same container as the MCP gateway: same
+rootfs, same PID namespace, same environment, as root. gVisor was doing its job
+the whole time — this was never a sandbox escape — but the boundary it draws is
+*around the actor*, and the credentials were inside it.
+
+Three things followed, each verified live before the fix:
+
+| | Evidence |
+|---|---|
+| the fleet admin token was readable | `env` in a tool showed `HAND_ADMIN_TOKEN`; after scrubbing the child env, `cat /proc/1/environ` still yielded it |
+| the token authorized every hand | `grant.go:32` — "mounted into every hand"; an `/admin` call with it returned **200** |
+| the gateway's source was readable and writable | `ls /app` returned `src/gateway.mjs`; root could rewrite it, and the actor snapshot persists that for the session |
+
+Fixed in two steps. First the token itself: `/admin` now takes a session-scoped
+grant and the shared secret is gone (see F3). Then the structural fix — the
+executor is a **second container in the same actor**:
+
+```
+actor h-<sid>
+├── gateway : MCP protocol + credentials, NO /workspace mount
+└── exec    : all commands and all filesystem work, mounts /workspace, no credentials
+```
+
+Verified after the split, from inside a tool:
+
+```
+ls /app            → server.mjs                    (was: src/gateway.mjs, node_modules, …)
+/proc/1/environ    → HAND_WORKDIR PATH NODE_VERSION YARN_VERSION
+                     VIRTUAL_ENV GIT_TERMINAL_PROMPT EXEC_PORT HOME
+```
+
+The gateway's source and environment are not hidden from the executor — they are
+**not present in it**. That distinction is the point: an earlier proposal to
+filter `ls` output through ext_proc would have been obfuscation, defeated by
+`find`, `echo /app/*` or a three-line Python script.
+
+**Why the executor owns the workspace.** gVisor refuses the same DurableDir in
+two containers — *"repeated submounts are not supported with overlay
+optimizations"* — so the gateway mounts nothing and proxies reads, writes,
+globs and git to the executor. That is stronger than the original plan: the
+process holding the session's credentials never touches the filesystem the
+model can write to.
+
+**Still not covered.** The executor runs as **root** and its own `/app` is
+writable, so an agent can still rewrite the executor's code for the life of its
+session. `Container` in the ateapi proto has no `securityContext`, so non-root
+has to come from a `USER` directive in the image — and `/workspace` is a
+root-owned DurableDir, so that needs the mount's ownership resolved first.
 
 ### F2 — CRITICAL — Cleartext HTTP on the public endpoint
 *Information disclosure.* The ingress has no TLS, and `ONBOARDING.md` hands
@@ -379,9 +436,17 @@ failure there defeats our controls:
 
 ## 5. What to fix first
 
-1. **F2 (TLS)** and **F1 (session ownership)** — before any external tester. Both are small.
-2. **F5 (NetworkPolicy)** and **F4 (grant TTL)** — cheap, big blast-radius reduction.
-3. **F9/F11/F12 (egress)** — the structural fix; it subsumes F6. F3's key
-   separation is done; per-hand admin tokens are what remain of it.
+1. **F2 (TLS)** — the last CRITICAL, and the only one still open. Every token and
+   PAT crosses the public endpoint in cleartext. Blocked on a domain purchase,
+   not on engineering. F1, F4, F5 are done; F3 and F14 closed the hand's
+   credential exposure.
+2. **F13 (subagent tool policy)** — the remaining HIGH we control. gVisor is the
+   backstop, but the spec advertises a per-subagent boundary that is not enforced.
+3. **F9/F11/F12 (egress)** — the structural fix; it subsumes F6. Note this is now
+   the *only* place `WebFetch` is constrained by nothing: with F14 done, tools
+   run credential-free, but they still reach `0.0.0.0/0`.
 4. When building F9, enforce via **atunnel, not `HTTPS_PROXY`** (F11) — otherwise the
    containment is one `unset` away from being nothing.
+5. **F14 leftovers** — the executor runs as root with a writable `/app`. Lower
+   priority than the above: it can only rewrite its own container for the life of
+   one session, and it holds no credentials to steal.
