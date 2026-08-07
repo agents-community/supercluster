@@ -86,6 +86,8 @@ func main() {
 		runConfigure(os.Args[2:])
 	case "dispatcher":
 		runDispatcher(os.Args[2:])
+	case "console":
+		runConsole(os.Args[2:])
 	default:
 		usage()
 	}
