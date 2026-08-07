@@ -16,8 +16,16 @@ const localImports = (src) =>
   [...src.matchAll(/from\s+"(\.[^"]+)"/g)].map((m) => m[1]);
 
 test("every locally imported module is copied into every brain image", () => {
-  // What the top-level modules and harnesses actually import.
-  const roots = ["server.mjs", "runtime.mjs", "identity.mjs", "otel.mjs", "approval.mjs"];
+  // Roots are whatever the images actually COPY, not a hardcoded list — a
+  // hardcoded one goes stale the moment a module is added or removed, and then
+  // the guard fails for the wrong reason rather than the real one.
+  const roots = [...new Set(
+    readdirSync(".").filter((f) => f.startsWith("Dockerfile"))
+      .flatMap((df) => readFileSync(df, "utf8").split("\n")
+        .map((l) => l.match(/^COPY\s+(.+?)\s+\/app\/?$/))
+        .filter(Boolean)
+        .flatMap((m) => m[1].split(/\s+/))))]
+    .filter((f) => f.endsWith(".mjs"));
   const needed = new Set(roots);
   for (const f of roots) {
     for (const imp of localImports(readFileSync(f, "utf8"))) {
