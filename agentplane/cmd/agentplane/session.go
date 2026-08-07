@@ -387,12 +387,19 @@ func sessionSuspend(sc sessionCtx, args []string, alsoDelete bool) {
 		fmt.Printf("session %s suspended (mind checkpointed)\n", sid)
 	}
 	if alsoDelete {
-		if _, err := ctrl.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		// Delegate the cascade rather than repeating it. This used to be a
+		// second implementation of the same sequence, and it carried the same
+		// bug in two places: log.Fatalf on the brain aborted before the hand
+		// was ever reached, and the hand's own delete error was discarded. So
+		// deleting a session whose brain had already gone left the hand behind
+		// — which is precisely the state that had to be cleaned up by hand
+		// (#71). deleteSession tolerates a missing brain and reports a
+		// surviving hand.
+		if err := deleteSession(ctx, sc, sid, brain); err != nil {
 			log.Fatalf("delete: %v", err)
 		}
-		// Cascade: nothing runtime survives the session. The escrowed
-		// transcript is the ONE deliberate survivor (audit record).
-		cleanupSnapshots(sc, brain)
+		fmt.Printf("session %s deleted (brain + hand + snapshots removed; transcript escrowed)\n", sid)
+		return
 	}
 
 	// Paired hand (h-<id>): keep it in lockstep with the brain so the pair
@@ -402,13 +409,7 @@ func sessionSuspend(sc sessionCtx, args []string, alsoDelete bool) {
 	handName := naming.HandActor(sid)
 	handRef := &ateapipb.ObjectRef{Atespace: sc.atespace, Name: handName}
 	_, _ = ctrl.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: handRef})
-	if alsoDelete {
-		_, _ = ctrl.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: handRef})
-		cleanupSnapshots(sc, handName)
-		fmt.Printf("session %s deleted (brain + hand + snapshots removed; transcript escrowed)\n", sid)
-	} else {
-		fmt.Printf("session %s suspended (mind + hand checkpointed)\n", sid)
-	}
+	fmt.Printf("session %s suspended (mind + hand checkpointed)\n", sid)
 }
 
 // fetchEvents pulls the session event log (wakes the mind if suspended).
