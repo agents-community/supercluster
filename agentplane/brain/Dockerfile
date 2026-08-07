@@ -32,7 +32,7 @@ RUN npm install "@anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK_VERSION}" @op
 # `docker build` is perfectly happy. otel.mjs was missing from the pi and codex
 # images — invisible only because those had not been rebuilt since runtime.mjs
 # started importing it.
-COPY server.mjs runtime.mjs identity.mjs otel.mjs /app/
+COPY server.mjs runtime.mjs identity.mjs otel.mjs approval.mjs /app/
 COPY harness /app/harness
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

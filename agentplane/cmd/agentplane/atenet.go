@@ -128,15 +128,22 @@ func missingTemplates(st *atenetStatus, ns string, cluster []string) []string {
 	return missing
 }
 
-// clusterTemplates lists ActorTemplate names in the agent namespace.
+// clusterTemplates lists ActorTemplate names in the agent namespace that are
+// READY, and only those.
+//
+// The phase filter is load-bearing, not a refinement. atenet's /statusz is built
+// from readyTemplates(), so a template still baking its golden is legitimately
+// absent from atenet's view. Comparing against every template regardless of
+// phase reported `atenet-stale` every time anyone created an agent — a false
+// alarm on the one endpoint whose whole job is to be trusted.
 //
 // Uses the raw list rather than listAgents(), which collapses versions into one
-// entry per logical agent and hides hands. Both are exactly what must be
-// checked here: each version is its own template, and an unroutable hand breaks
-// tool execution just as thoroughly as an unroutable brain.
+// entry per logical agent and hides hands. Both matter here: each version is its
+// own template, and an unroutable hand breaks tool execution just as thoroughly
+// as an unroutable brain.
 func clusterTemplates(ctx context.Context, sc sessionCtx) ([]string, error) {
 	out, err := runKubectl(ctx, "get", "actortemplates", "-n", sc.templateNS,
-		"-o", "jsonpath={.items[*].metadata.name}")
+		"-o", `jsonpath={range .items[?(@.status.phase=="Ready")]}{.metadata.name} {end}`)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

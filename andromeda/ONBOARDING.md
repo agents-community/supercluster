@@ -62,7 +62,7 @@ andromeda agent get starter > my-agent.yaml
 
 ```yaml
 name: reviewer                    # your own name — reusing one makes a new VERSION
-harness: claude-code              # or codex, pi
+harness: claude-code              # or pi
 model: claude-sonnet-5
 image: gcr.io/…@sha256:…          # keep whatever `agent get` gave you (see below)
 hand: true                        # tools run in the sandbox, not in the reasoning layer
@@ -220,8 +220,7 @@ stored; `cred rm gh-token` removes it.
 | Agent | Engine | Good for |
 |---|---|---|
 | **`starter`** | Claude (claude-code) | the full experience — runs code, git, files on its hand; **start here** |
-| `codex` | OpenAI Codex | same platform, a different agent engine |
-| `pi` | model-agnostic (pi) | one harness, any model provider |
+| `pi` | model-agnostic (pi) | one harness, any model provider — pick the vendor with `model: provider/model-id` |
 
 Run `andromeda` with no arguments any time to see the live list.
 
