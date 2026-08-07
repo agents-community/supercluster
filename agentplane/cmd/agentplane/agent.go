@@ -35,6 +35,9 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 
 	"github.com/quantumnode/agentplane/internal/agentspec"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/quantumnode/agentplane/internal/naming"
 )
 
@@ -424,15 +427,38 @@ func deleteSession(ctx context.Context, sc sessionCtx, sid, brain string) error 
 	escrowTranscript(sc, sid, brain)
 	ref := &ateapipb.ObjectRef{Atespace: sc.atespace, Name: brain}
 	_, _ = ctrl.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}) // fine if already suspended
-	if _, err := ctrl.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+	// NotFound is success: the cascade must be idempotent, because a retry
+	// after a partial failure has to get past an already-deleted brain to
+	// reach the hand that is still there.
+	if _, err := ctrl.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil &&
+		status.Code(err) != codes.NotFound {
 		return fmt.Errorf("delete session %s: %w", sid, err)
 	}
 	cleanupSnapshots(sc, brain)
-	// Cascade the paired hand actor (best-effort — absent for non-hand agents).
+
+	// Cascade the paired hand. NotFound is the ONLY expected failure — that is
+	// a single-actor agent with no hand to remove.
+	//
+	// Every other error used to be discarded (`_, _ =`), and the caller treats
+	// a nil return as success: it answers 200 and releases the Firestore
+	// ownership record. So one transient ateapi failure leaked the hand, its
+	// DurableDir and its GCS snapshots permanently, AND erased the only record
+	// of who owned it — which is exactly how the orphans found by the fleet
+	// view ended up with no owner (#71).
 	hand := naming.HandActor(sid)
 	handRef := &ateapipb.ObjectRef{Atespace: sc.atespace, Name: hand}
 	_, _ = ctrl.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: handRef})
-	_, _ = ctrl.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: handRef})
+	if _, err := ctrl.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: handRef}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil // no hand: nothing to cascade
+		}
+		// Deliberately NOT removing its snapshots: the actor still exists, and
+		// deleting the snapshots of a live actor leaves one that cannot be
+		// restored. Returning the error keeps the ownership record too, so the
+		// leak stays attributable and the delete can be retried.
+		return fmt.Errorf("delete session %s: brain removed but its hand %s remains "+
+			"(retry the delete): %w", sid, hand, err)
+	}
 	cleanupSnapshots(sc, hand)
 	return nil
 }
