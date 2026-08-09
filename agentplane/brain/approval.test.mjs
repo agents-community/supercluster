@@ -32,6 +32,10 @@ test("ask matches bare names and federated server/tool", () => {
   // bare
   assert.equal(needsApproval("Bash", ask), true);
   assert.equal(needsApproval("Read", ask), false);
+  // bare name served through the hand: `ask:[Bash]` must gate `mcp__hand__bash`
+  // (case-insensitive) — the regression that let hand-backed bash run unapproved
+  assert.equal(needsApproval("mcp__hand__bash", ask), true);
+  assert.equal(needsApproval("mcp__hand__read", ask), false);
   // federated through a hand — the name the model actually sees
   assert.equal(needsApproval("mcp__hand__github__create_issue", ask), true);
   assert.equal(needsApproval("mcp__hand__github__list_issues", ask), false);

@@ -85,12 +85,11 @@ function Line({ line }) {
         chip("you", line.dim ? C.faint : C.cyan), h(Text, {}, " "),
         h(Text, { color: line.dim ? C.dim : C.text }, line.text));
     case "agent":
-      // History replays stay flat + dim; live replies get full markdown.
-      if (line.dim)
-        return h(Box, {}, chip("andromeda", C.faint), h(Text, {}, " "),
-          h(Text, { color: C.dim }, line.text));
+      // Both replayed history and live replies get full markdown, so a resumed
+      // conversation reads exactly like a live one — code blocks and all. The
+      // chip dims for history as the only cue that it's replay, not fresh output.
       return h(Box, { flexDirection: "column", marginBottom: 1 },
-        h(Box, {}, chip("andromeda", C.violet)),
+        h(Box, {}, chip("andromeda", line.dim ? C.faint : C.violet)),
         h(Box, { flexDirection: "column", paddingLeft: 1 }, ...renderMarkdown(line.text, C)));
     case "tool": {
       const icon = TOOL_ICON[line.text] || "⚙";
@@ -130,7 +129,7 @@ function summariseApproval(input) {
 
 // Answering wakes the session: the brain queues an input so the agent retries
 // the call it was blocked on. So this is an action, not a note for later.
-async function decide({ client, sessionId, append }, args, decision) {
+async function decide({ client, sessionId, append, stream }, args, decision) {
   const [req, ...rest] = args || [];
   if (!req) {
     append({ kind: "info", text: `usage: /${decision} <request-id> [note]` });
@@ -138,10 +137,14 @@ async function decide({ client, sessionId, append }, args, decision) {
   }
   try {
     await client.decideApproval(sessionId, req, decision, rest.join(" ") || undefined);
-    append({ kind: "info", text: `${decision === "approve" ? "approved" : "denied"} ${req} — the agent picks up from here` });
   } catch (e) {
     append({ kind: "error", text: `${decision}: ${e.message}` });
+    return;
   }
+  append({ kind: "info", text: `${decision === "approve" ? "approved" : "denied"} ${req} — the agent picks up from here` });
+  // The decision queues a nudge that re-drives the turn; follow it live so the
+  // approved tool visibly runs instead of appearing to hang until the next message.
+  if (stream) await stream();
 }
 
 // ── slash commands ───────────────────────────────────────────────────────────
@@ -261,7 +264,7 @@ function StatusPill({ state, elapsed }) {
   return h(Text, { color: C.green }, "● online · it remembers");
 }
 
-export function App({ client, sessionId, agentName, initialLines, initialCursor }) {
+export function App({ client, sessionId, agentName, harness, initialLines, initialCursor }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [lines, setLines] = useState(initialLines);
@@ -282,7 +285,37 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
 
   const append = (line) => line && setLines((ls) => [...ls, line]);
 
-  const cmdCtx = { client, sessionId, agentName, append, exit };
+  // Stream whatever the session emits next, from our cursor, into the transcript.
+  // Shared by sending a message AND by approving/denying: all three make the brain
+  // drive a turn, and the UI must follow it — otherwise an approval looks like it
+  // did nothing until the next message flushes the backlog (the "stuck after
+  // /approve" bug).
+  const streamFromCursor = async () => {
+    setState("thinking");
+    let buf = "";
+    const setStream = () => setLines((ls) => {
+      const c = ls.slice();
+      if (c.length && c[c.length - 1].kind === "stream") c[c.length - 1] = { kind: "stream", text: buf };
+      else c.push({ kind: "stream", text: buf });
+      return c;
+    });
+    const clearStream = () => setLines((ls) =>
+      ls.length && ls[ls.length - 1].kind === "stream" ? ls.slice(0, -1) : ls);
+    try {
+      cursor.current = await client.streamTurn(sessionId, cursor.current, (ev) => {
+        if (ev.type === "session.status_running" || ev.type === "user.message") return;
+        if (ev.type === "agent.message_delta") { buf += ev.text || ""; setStream(); return; }
+        if (ev.type === "agent.message") { clearStream(); buf = ""; append(eventToLine(ev)); return; }
+        if (ev.type === "session.status_idle") { clearStream(); buf = ""; return; }
+        append(eventToLine(ev)); // tool_use, error
+      });
+    } catch (e) {
+      append({ kind: "error", text: e.message });
+    }
+    setState("idle");
+  };
+
+  const cmdCtx = { client, sessionId, agentName, append, exit, stream: streamFromCursor };
 
   // No global key bindings. esc used to detach and ctrl+s used to suspend, and
   // both are gone deliberately: they fired mid-turn from a stray keypress, and
@@ -301,27 +334,11 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
     try {
       await client.send(sessionId, text, (attempt) =>
         append({ kind: "info", text: `waking the mind… (attempt ${attempt})` }));
-      setState("thinking");
-      let buf = "";
-      const setStream = () => setLines((ls) => {
-        const c = ls.slice();
-        if (c.length && c[c.length - 1].kind === "stream") c[c.length - 1] = { kind: "stream", text: buf };
-        else c.push({ kind: "stream", text: buf });
-        return c;
-      });
-      const clearStream = () => setLines((ls) =>
-        ls.length && ls[ls.length - 1].kind === "stream" ? ls.slice(0, -1) : ls);
-      cursor.current = await client.streamTurn(sessionId, cursor.current, (ev) => {
-        if (ev.type === "session.status_running" || ev.type === "user.message") return;
-        if (ev.type === "agent.message_delta") { buf += ev.text || ""; setStream(); return; }
-        if (ev.type === "agent.message") { clearStream(); buf = ""; append(eventToLine(ev)); return; }
-        if (ev.type === "session.status_idle") { clearStream(); buf = ""; return; }
-        append(eventToLine(ev)); // tool_use, error
-      });
+      await streamFromCursor();
     } catch (e) {
       append({ kind: "error", text: e.message });
+      setState("idle");
     }
-    setState("idle");
   };
 
   const rows = stdout?.rows ?? 30;
@@ -346,14 +363,14 @@ export function App({ client, sessionId, agentName, initialLines, initialCursor 
 
     // footer
     h(Box, { justifyContent: "space-between", paddingX: 1 },
-      h(Box, {}, chip(agentName || "agent", C.blue), h(Text, { color: C.dim }, ` ${sessionId}`)),
+      h(Box, {},
+        chip(agentName || "agent", C.blue),
+        harness ? h(Text, { key: "hg", color: C.dim }, " on ") : null,
+        harness ? chip(harness, C.amber) : null,
+        h(Text, { color: C.dim }, ` ${sessionId}`)),
       h(Text, { color: C.dim }, [
         h(Text, { key: "1", color: C.cyan }, "enter"), " send  ",
         h(Text, { key: "2", color: C.violet }, "/help"), " commands  ",
         h(Text, { key: "3", color: C.pink }, "/quit"), " detach",
       ])));
-}
-
-export function historyLines(events, keep = 20) {
-  return events.slice(-keep).map((ev) => eventToLine(ev, { history: true })).filter(Boolean);
 }

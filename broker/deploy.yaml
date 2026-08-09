@@ -1,0 +1,65 @@
+# The broker: the mediator between brain and hand. A plain pod (NOT a Substrate
+# actor) — it runs only our trusted code (MCP mediation, credentials, approval
+# policy), never untrusted model output, so it needs no sandbox. See README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentplane-broker
+  namespace: agentplane
+  labels: { app: agentplane-broker }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: agentplane-broker }
+  template:
+    metadata:
+      labels: { app: agentplane-broker }
+    spec:
+      # Its OWN ServiceAccount — the broker authenticates to serve's internal
+      # exec endpoint by workload identity (a projected SA token, verified by
+      # TokenReview), not a shared secret (F15). It has no GCP access of its own.
+      serviceAccountName: agentplane-broker
+      containers:
+      - name: broker
+        image: ${IMAGE_REPO}/agentplane-broker:${BROKER_TAG}
+        env:
+        - { name: AGENTPLANE_SERVE_BASE, value: "http://agentplane-serve.agentplane.svc:7433" }
+        - { name: PORT, value: "8088" }
+        ports:
+        - { containerPort: 8088 }
+        # Projected SA token, audience-scoped to serve; serve validates it with a
+        # k8s TokenReview and checks the SA identity. Re-read per request (kubelet
+        # rotates it before expiry). This is how the broker proves who it is.
+        volumeMounts:
+        - { name: broker-token, mountPath: /run/broker-token, readOnly: true }
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8088 }
+          periodSeconds: 20
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8088 }
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits: { memory: 256Mi }
+      volumes:
+      - name: broker-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: agentplane-serve
+              expirationSeconds: 3600
+              path: token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker
+  namespace: agentplane
+spec:
+  selector: { app: agentplane-broker }
+  ports:
+  - { port: 80, targetPort: 8088 }

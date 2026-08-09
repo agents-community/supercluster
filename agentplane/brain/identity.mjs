@@ -16,13 +16,27 @@ export function actorIdentity() {
   }
 }
 
+// The hand MCP URL serve pushed for THIS session (over /options), routing the
+// brain through the broker instead of straight to the hand. Session-scoped
+// process state, and safe under snapshots: a golden is frozen before any turn,
+// so it is null at golden time; every restored actor starts null and gets its
+// own push after restore — the same lazy-per-actor discipline as actorIdentity.
+let pushedHandURL = null;
+
+/** Set the hand MCP URL for this session (serve → /options → runtime). */
+export function setHandURL(u) {
+  if (typeof u === "string" && u) pushedHandURL = u;
+}
+
 /**
  * The paired hand actor's MCP URL for this brain, by the b-X ↔ h-X convention
- * (D3). Overridable via HAND_MCP_URL. Returns null when there is no pairing
- * (non-brain identity / off-Substrate).
+ * (D3). Precedence: HAND_MCP_URL env (operator/test override) > serve-pushed
+ * (the broker) > the computed hand address. Returns null when there is no
+ * pairing (non-brain identity / off-Substrate).
  */
 export function handURL() {
   if (process.env.HAND_MCP_URL) return process.env.HAND_MCP_URL;
+  if (pushedHandURL) return pushedHandURL;
   const id = actorIdentity();
   if (id.startsWith("b-")) {
     const atespace = process.env.AGENTPLANE_ATESPACE || "agents";

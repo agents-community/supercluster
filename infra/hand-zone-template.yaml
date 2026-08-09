@@ -1,0 +1,43 @@
+# hand-v15 — the ZONE hand template.
+#
+# A single container: the gVisor sandbox a session's commands run in, holding
+# only the toolchain + the durable /workspace. No gateway, no executor — the
+# runtime is the broker, outside gVisor. Commands are launched via the control
+# plane's ExecActor (runsc exec) into the `exec` container; `ls /` inside a
+# command shows the zone and none of our code.
+#
+# Keep-alive: the image's entrypoint is `sleep infinity`, so the container stays
+# running for runsc exec to enter. It has no readyz, so the actor is RUNNING as
+# soon as the container starts; the broker resumes it on the first exec.
+#
+# Account-specific values are ${IMAGE_REPO} and ${SNAPSHOT_BUCKET} (both from
+# infra/config.env). Apply with:
+#   source infra/config.env
+#   envsubst '$IMAGE_REPO $SNAPSHOT_BUCKET' < infra/hand-zone-template.yaml | kubectl apply -f -
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: hand-v15
+  namespace: agentplane
+  labels:
+    agentplane.io/managed: "true"
+    agentplane.io/role: hand
+spec:
+  containers:
+    - name: exec
+      image: ${IMAGE_REPO}/agentplane-exec@sha256:da0c56031580e61d40cd3e0100e9826884c9dcaa8396f4814c3c8931c678af80
+      env:
+        - { name: HAND_WORKDIR, value: /workspace }
+      volumeMounts:
+        - { mountPath: /workspace, name: workspace }
+  pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+  sandboxClass: gvisor
+  snapshotsConfig:
+    location: gs://${SNAPSHOT_BUCKET}/agentplane/
+    onCommit: Full
+    onPause: Full
+  volumes:
+    - { durableDir: {}, name: workspace }
+  workerSelector:
+    matchLabels:
+      workload: agentplane-hand

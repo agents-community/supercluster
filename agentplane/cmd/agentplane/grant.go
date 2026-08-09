@@ -135,26 +135,6 @@ func (s *server) verifyGrant(token string) (grantClaims, bool) {
 	return c, true
 }
 
-// handleHandAdminVerify is called by the HAND to check an admin grant it was
-// presented (#74). The hand cannot verify the HMAC itself — that would need the
-// signing key, which is the whole thing we are keeping out of the sandbox — so
-// it asks serve, exactly as it already does for credentials.
-//
-// Returns the session the grant is for. The hand compares that against its OWN
-// identity and rejects a mismatch, so a grant lifted from one session's hand
-// does not authorize another's. NOT wrapped in s.auth — the grant IS the auth.
-func (s *server) handleHandAdminVerify(w http.ResponseWriter, r *http.Request) {
-	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	claims, ok := s.verifyGrant(tok)
-	if !ok || !claims.Admin {
-		// Same answer for a bad signature, an expired grant and a credential
-		// grant replayed here — none of them should learn which they were.
-		writeErr(w, http.StatusUnauthorized, "invalid or expired admin grant")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"session": claims.Sid})
-}
-
 // handleHandCredPull is called by the HAND (not a user): it presents its grant
 // and a credential name; serve verifies the grant covers that name, reads the
 // vault, and returns the payload. NOT wrapped in s.auth — the grant IS the auth.

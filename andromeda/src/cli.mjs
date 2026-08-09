@@ -16,7 +16,7 @@ import { render } from "ink";
 import readline from "node:readline";
 import { readFileSync } from "node:fs";
 import { Client } from "./api.mjs";
-import { App, historyLines } from "./app.mjs";
+import { App } from "./app.mjs";
 import { loadConfig, saveConfig, clearConfig, configPath } from "./config.mjs";
 
 const h = React.createElement;
@@ -285,6 +285,7 @@ if (positional === "sessions") await runSessions(client);
 
 let sessionId = arg("session");
 let agentName = arg("agent");
+let harness = "";
 
 if (!sessionId && !agentName) {
   // No target: show what exists and how to attach, then exit.
@@ -312,21 +313,41 @@ if (!sessionId) {
   try {
     const created = await client.createSession(agentName, apiKey);
     sessionId = created.id;
+    agentName = agentName || created.agent;
+    harness = created.harness || "";
   } catch (e) {
     fail(`could not create a session for agent ${agentName}: ${e.message}`);
   }
 }
 
-// Replay recent history so re-attach feels like coming back, not starting over.
+// Resolve the harness (and agent, when attaching by --session) so the UI can
+// show which loop is running — claude-code or pi.
+if (!harness) {
+  try {
+    const s = await client.session(sessionId);
+    harness = s.harness || "";
+    agentName = agentName || s.agent;
+  } catch { /* older serve without a session-detail route */ }
+}
+
+// On reattach we do NOT replay the transcript into the TUI: the mind keeps the
+// whole conversation server-side, so redrawing it locally is just noise. We only
+// take the cursor, so the next turn streams from where the log left off — the
+// screen opens clean on the andromeda banner, same as a fresh start. Live output
+// during the session still streams normally.
 let initialLines = [];
 let initialCursor = "";
 try {
   const events = await client.events(sessionId);
-  initialLines = historyLines(events);
   if (events.length) initialCursor = events[events.length - 1].id;
 } catch { /* a brand-new session has no history */ }
 
-const instance = render(h(App, { client, sessionId, agentName, initialLines, initialCursor }));
+// Clear the terminal (screen + scrollback) so both a new session and a resume
+// open on a clean screen with the andromeda banner, not stacked under old shell
+// output or a previous attach.
+process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+
+const instance = render(h(App, { client, sessionId, agentName, harness, initialLines, initialCursor }));
 await instance.waitUntilExit();
 console.log(`detached — the mind lives on.
   re-attach:  andromeda --session ${sessionId}`);

@@ -1,0 +1,4 @@
+node_modules
+mock-hand.mjs
+smoke.mjs
+*.log

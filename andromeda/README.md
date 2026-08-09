@@ -4,6 +4,8 @@ A beautiful terminal for **durable agent minds** on AgentPlane. Chat like any
 CLI agent — except detaching never loses the conversation: the mind
 checkpoints, sleeps for ~free, and wakes with full memory when you return.
 
+![The andromeda TUI — the footer shows the agent and its harness (claude-code or pi)](./assets/andromeda-tui.png)
+
 ```bash
 npx @agentsupercluster/andromeda --agent buddy        # new mind, start chatting
 npx @agentsupercluster/andromeda --session sess-…     # come back tomorrow — it remembers

@@ -1,0 +1,30 @@
+AgentPlane
+Copyright 2026 The AgentPlane Authors
+
+This product includes software developed by The AgentPlane Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this software except in compliance with the License. You may obtain a copy of
+the License in the LICENSE file, or at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+------------------------------------------------------------------------------
+Third-party attributions
+------------------------------------------------------------------------------
+
+Agent Substrate
+  https://github.com/agent-substrate/substrate
+  Copyright 2026 Google LLC
+  Licensed under the Apache License, Version 2.0.
+
+  AgentPlane is built on Agent Substrate: it runs agent sessions as gVisor
+  actors on Substrate and calls the Substrate control plane (ateapi/atelet/
+  ateom) for actor lifecycle, checkpoint/restore, networking (atenet) and the
+  host-side exec door (Control.ExecActor). AgentPlane depends on Substrate as
+  a module and does not redistribute its source in this repository.
+
+  The patches under infra/substrate-patches/ (e.g. the actor exec door,
+  0003-actor-exec-door.patch) are modifications to Agent Substrate source and
+  are likewise licensed under the Apache License, Version 2.0. They must be
+  applied against a corresponding checkout of Agent Substrate.

@@ -1,6 +1,3 @@
-# NOTE: the image is digest-pinned and BOTH parts are per-account — replace
-# PROJECT_ID and the digest after building into your own project.
-# See infra/BOOTSTRAP.md step 8.
 # A Codex-harness agent — same runtime, same durability, different brain
 # vendor. Requires an OpenAI key: `agentplane configure -provider openai
 # -api-key sk-…` (or POST the spec with apiKeySecret pointing at your own).
@@ -11,7 +8,6 @@
 
 name: codex
 harness: codex
-image: gcr.io/PROJECT_ID/ate-images/agentplane-brain-codex@sha256:e5813bd61e863e2a128f04d95615a23a7815fe058cd155231ffe17728a56f1c8
 
 systemPrompt: >-
   You are a concise coding agent. You work in /workspace. Do what is asked,

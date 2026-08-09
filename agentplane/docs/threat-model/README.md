@@ -76,7 +76,7 @@ attacking, drawn as deployed rather than as designed.
 | Transcripts (escrow) | GCS `gs://…/transcripts/` | conversation disclosure |
 | Execution journal | actor `/workspace` + Cloud Logging | reveals commands run (by design — it is the audit trail) |
 | Grant-signing key | k8s Secret `agentplane-grant-key`, env in **serve only** | forge grants for any user/credential — no longer shared with hands (F3 fixed) |
-| Hand admin token | k8s Secret `agentplane-hand-admin`, env in every hand | drive another session's hand admin plane |
+| Broker↔serve internal token | k8s Secret `agentplane-internal`, env in **serve + broker** | POST `/v1/internal/exec` → run a command in any actor (F15). Actors can reach serve:7433, so this token is what gates that endpoint |
 | Session metadata | **Firestore** `sessions/{sid}` — owner, agent, version pin, activity, usage | maps sessions to the people who own them; reveals who ran what and what it cost |
 | Agent definitions + version history | **Firestore** `agents/{name}/versions/{n}` — the submitted spec, verbatim | system prompts and tool policy; a writer could point new sessions at an attacker-authored agent |
 | Lifetime spend per user | **Firestore** `usage/{email}` | billing/usage disclosure, keyed by email |
@@ -84,18 +84,22 @@ attacking, drawn as deployed rather than as designed.
 
 ## 2. Trust boundaries
 
-1. **Internet ↔ LB** — `http://136.68.213.85.nip.io`, **no TLS** (verified: ingress `tls: NONE`)
+1. **Internet ↔ LB** — `http://api.example.internal`, **no TLS** (verified: ingress `tls: NONE`)
 2. **LB ↔ serve** — in-cluster HTTP
 3. **serve ↔ Substrate control plane** — gRPC/TLS. `ateapiTLS()` verifies against
    `AGENTPLANE_ATEAPI_CA` when set and warns loudly when not; **the deployment does
    not set it**, so verification is off in practice (F10)
 4. **worker ↔ actor** — gVisor sandbox: *the* boundary against model-generated code
-4a. **gateway ↔ executor, inside the hand actor** — two containers in one sandbox.
-   gVisor protects the host and every other actor from a tool; it says nothing
-   about the hand's own secrets, which used to sit in the same container as the
-   shell. The executor now has its own rootfs, its own PID namespace and no
-   credentials; it owns `/workspace` outright because gVisor refuses one
-   DurableDir mounted into two containers. They share only the network namespace
+4a. **brain ↔ broker ↔ hand** — the runtime is now OUTSIDE the sandbox. The brain
+   calls the **broker** (a plain pod, not a Substrate actor) as its MCP server;
+   the broker holds the tool logic, credentials and approval policy and runs each
+   command in the hand by calling serve → `Control.ExecActor` → `runsc exec`. The
+   hand actor is a bare **zone** — toolchain + `/workspace`, none of our code —
+   so a tool has nothing of ours to read or rewrite (supersedes the former
+   gateway/executor split; see F14). The new edges this creates are F15.
+4b. **broker ↔ serve** — in-cluster HTTP to `/v1/internal/exec`, authed by a
+   shared token (`agentplane-internal`); serve holds the ateapi credential, the
+   broker never talks to the control plane directly.
 5. **actor ↔ actor / actor ↔ serve** — atenet (Envoy), Host-header routed.
    Substrate now ships per-pool NetworkPolicies (`substrate-brain-pool-*`,
    `substrate-hand-pool-*`) — **`policyTypes: [Ingress]` only**, admitting just
@@ -170,11 +174,65 @@ globs and git to the executor. That is stronger than the original plan: the
 process holding the session's credentials never touches the filesystem the
 model can write to.
 
-**Still not covered.** The executor runs as **root** and its own `/app` is
-writable, so an agent can still rewrite the executor's code for the life of its
-session. `Container` in the ateapi proto has no `securityContext`, so non-root
-has to come from a `USER` directive in the image — and `/workspace` is a
-root-owned DurableDir, so that needs the mount's ownership resolved first.
+**Now fully resolved — the executor moved OUT of the sandbox.** The split still
+left our executor *inside* the actor, running as root with a writable `/app`, so
+an agent could rewrite it for the life of its session. That is gone. The runtime
+no longer lives in the actor at all:
+
+```
+brain actor → broker pod (NOT Substrate) → serve → ateapi Control.ExecActor → runsc exec → hand zone
+              MCP + credentials + policy          the exec door                the command
+```
+
+The hand is now a **single "zone" container** (`hand-v15`): the toolchain plus
+the durable `/workspace`, `sleep infinity` as PID 1, and **none of our code**.
+Commands are launched from *outside* the actor via the control plane's
+`ExecActor` (`runsc exec`), so nothing an agent can reach is ours to rewrite.
+Verified live, from inside a tool:
+
+```
+ls /            → bin boot dev etc … workspace     (no /app)
+ls -la /app     → No such file or directory        (the executor is gone)
+/workspace      → write/read works
+uname -a        → 4.19.0-gvisor                     (still inside gVisor)
+```
+
+The "executor runs as root with a writable /app" concern no longer applies:
+there is no executor in the actor to rewrite, and the gateway is gone too. The
+runtime is the **broker**, a plain pod outside gVisor; the actor holds only the
+workspace and toolchain. The new attack surface this introduces — the exec door
+and the broker's trust edges — is tracked as **F15**.
+
+### F15 — MEDIUM — The exec door: a new run-in-any-actor primitive + a shared token
+
+Moving the executor out of the actor (F14) is a net reduction in what a tool can
+reach, but it adds a powerful new path that must be gated correctly:
+
+```
+broker → serve POST /v1/internal/exec → ateapi Control.ExecActor → runsc exec in actor
+```
+
+Three edges, each with its control and its residual risk:
+
+| edge | control today | residual |
+|---|---|---|
+| **`Control.ExecActor`** (new ateapi RPC) — runs an arbitrary command in **any RUNNING actor** | same auth as the rest of `Control`: a k8s SA JWT, audience `api.ate-system.svc`, verified against the cluster issuer | it is a genuinely new capability in Substrate's control plane — "exec into any actor". Anyone who can present a valid client JWT can run commands in any actor. It is as privileged as `CreateActor`/`DeleteActor`, but broader in effect; worth calling out because it did not exist before |
+| **`serve → ateapi`** carries that JWT | projected SA token, re-read per RPC; TLS | `InsecureSkipVerify` on the dial (F10) — the JWT is bearer-only, so a MITM on the in-cluster hop could replay it |
+| **`broker → serve /v1/internal/exec`** | shared token `agentplane-internal`, constant-time compared | **actors can reach `serve:7433`** (NetworkPolicy admits actor→serve), so this token is the *only* thing stopping a compromised actor from POSTing `/v1/internal/exec` and running commands in **other** actors. A single shared secret is one factor; it is not bound to the broker's identity. Rotating it or moving to the broker's SA identity would close that |
+
+**Resume-on-exec.** serve resumes the hand if it is suspended and retries once,
+so a tool call after an idle gap works. That means a caller with the internal
+token can also *wake* arbitrary actors, not just exec in already-running ones.
+
+**Output is buffered and returned by value** up the gRPC chain (bypassing
+atenet's ~10s route timeout — a real improvement over the old `/process`
+polling). The broker should cap output size; gVisor/gRPC message limits
+(~4 MB) otherwise bound it implicitly, but a large-output command is a
+memory-pressure vector on serve and the broker.
+
+**Not yet migrated.** Credential injection for git (the per-call `env` the
+broker would pass) and federated MCP tools are not wired through the exec path
+yet — agents using only the built-in tools are unaffected; see F9/F11/F12.
 
 ### F2 — CRITICAL — Cleartext HTTP on the public endpoint
 *Information disclosure.* The ingress has no TLS, and `ONBOARDING.md` hands
@@ -439,7 +497,8 @@ failure there defeats our controls:
 1. **F2 (TLS)** — the last CRITICAL, and the only one still open. Every token and
    PAT crosses the public endpoint in cleartext. Blocked on a domain purchase,
    not on engineering. F1, F4, F5 are done; F3 and F14 closed the hand's
-   credential exposure.
+   credential exposure — F14 now fully, with the executor moved out of the sandbox
+   entirely (the hand is a bare zone).
 2. **F13 (subagent tool policy)** — the remaining HIGH we control. gVisor is the
    backstop, but the spec advertises a per-subagent boundary that is not enforced.
 3. **F9/F11/F12 (egress)** — the structural fix; it subsumes F6. Note this is now
@@ -447,6 +506,12 @@ failure there defeats our controls:
    run credential-free, but they still reach `0.0.0.0/0`.
 4. When building F9, enforce via **atunnel, not `HTTPS_PROXY`** (F11) — otherwise the
    containment is one `unset` away from being nothing.
-5. **F14 leftovers** — the executor runs as root with a writable `/app`. Lower
-   priority than the above: it can only rewrite its own container for the life of
-   one session, and it holds no credentials to steal.
+5. **F15 (the exec door)** — introduced by moving the executor out. Bind
+   `/v1/internal/exec` to the broker's SA identity instead of a shared token (an
+   actor can reach serve:7433), and cap exec output size. Lower priority than the
+   above: the token is constant-time-checked and the net change from F14 is a
+   large reduction in what a tool can reach.
+
+_Diagrams are stale pending regen (no plantuml locally): `c4-components` and
+`seq-tool-call` still show the in-actor gateway/executor; the text (F14, F15,
+boundaries 4a/4b) is the current source of truth._
