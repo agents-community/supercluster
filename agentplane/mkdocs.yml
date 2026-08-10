@@ -15,22 +15,19 @@ theme:
     - content.code.copy
 markdown_extensions:
   - admonition
-  - pymdownx.superfences
   - pymdownx.highlight
   - tables
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 nav:
   - Home: index.md
   - Concepts: concepts.md
-  - API:
-      - Using the API: api-usage.md
-      - API reference: api.md
-  - Architecture:
-      - Brain server: brain-server.md
-      - Agents & AgentSpec: agents.md
-      - Observability & metrics: observability.md
-  - Security:
-      - Threat model: threat-model/README.md
-  - Operations:
-      - Reliability runbook: runbook-brain-reliability.md
-  - Contributing:
-      - Harness interface: harness-interface.md
+  - Using the API: api-usage.md
+  - Architecture: architecture.md
+  - Reference:
+      - AgentSpec: agents.md
+      - API: api.md
+      - Observability: observability.md

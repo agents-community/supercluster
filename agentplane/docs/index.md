@@ -17,10 +17,9 @@ $ agentplane session send -id sess-x7k2m9qw4a -m "Codeword?"
 # → "MOONRIVER-7"   (resumed from checkpoint in ~1s, memory intact)
 ```
 
-- **[Control-plane API](api.md)** — every capability over one HTTP endpoint: self-service access, agents, sessions, `/message` (+SSE stream), credential vault
-- **[Agents](agents.md)** — defining agents; harness templates in `examples/`
-- **[Brain server](brain-server.md)** — architecture of a durable mind
-- **[Harness interface](harness-interface.md)** — adding a brain vendor
-- **[Threat model](threat-model/README.md)** — STRIDE analysis, trust boundaries, and PlantUML diagrams of every token/credential exchange
-- **[Observability](observability.md)** — end-to-end tracing (serve → atenet → brain → hand)
-- **[Reliability runbook](runbook-brain-reliability.md)** — drills + findings log
+- **[Concepts](concepts.md)** — the building blocks: durable sessions, agents, harnesses, brain/hand, the broker
+- **[Using the API](api-usage.md)** — a task-oriented walkthrough of the control-plane API
+- **[Architecture](architecture.md)** — components, protocols, and trust boundaries
+- **[AgentSpec](agents.md)** — defining agents; harness templates in `examples/`
+- **[API reference](api.md)** — every endpoint, error, and auth rule
+- **[Observability](observability.md)** — end-to-end tracing (serve → brain → hand)
