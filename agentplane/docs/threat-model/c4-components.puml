@@ -18,7 +18,7 @@ package "Internet" {
 
 package "GKE cluster" {
   package "namespace: agentplane" {
-    rectangle "Ingress / LB\n136.68.213.85.nip.io\n<b>NO TLS</b> (F2)" <<danger>> as lb
+    rectangle "Ingress / LB\napi.example.internal\n<b>NO TLS</b> (F2)" <<danger>> as lb
     rectangle "agentplane-serve\nKSA agentplane-serve + Workload Identity" as serve
     rectangle "agentplane-dispatcher\n(same KSA)" as disp
     rectangle "brain actor  b-<sid>\ngVisor · harness + conversation" as brain

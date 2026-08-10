@@ -1,6 +1,6 @@
 site_name: AgentPlane
 site_description: Durable agent minds on checkpointable sandboxes
-repo_url: https://github.com/REPLACE_ME/agentplane
+repo_url: https://github.com/agents-community/supercluster
 theme:
   name: material
   palette:
@@ -20,10 +20,13 @@ markdown_extensions:
   - tables
 nav:
   - Home: index.md
+  - Concepts: concepts.md
+  - API:
+      - Using the API: api-usage.md
+      - API reference: api.md
   - Architecture:
       - Brain server: brain-server.md
       - Agents & AgentSpec: agents.md
-      - Control-plane API: api.md
       - Observability & metrics: observability.md
   - Security:
       - Threat model: threat-model/README.md

@@ -90,6 +90,9 @@ export class Client {
   setKey(id, apiKey) { return this.json("PUT", `/v1/sessions/${id}/key`, { apiKey }); }
   session(id) { return this.json("GET", `/v1/sessions/${id}`); }
   suspend(id) { return this.json("POST", `/v1/sessions/${id}/suspend`); }
+  // Cascade delete: escrow the transcript, delete the brain + hand actors, and
+  // remove snapshots. Owner-scoped — a session you don't own answers 404.
+  deleteSession(id) { return this.json("DELETE", `/v1/sessions/${encodeURIComponent(id)}`); }
   // Approvals (#67). Answering one wakes the session — the brain queues an
   // input so the agent retries the call it was gated on.
   approvals(id) { return this.json("GET", `/v1/sessions/${id}/approvals`).then((d) => d.approvals ?? []); }

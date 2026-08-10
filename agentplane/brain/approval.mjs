@@ -18,6 +18,12 @@ export function needsApproval(tool, askList) {
   for (const entry of askList) {
     if (typeof entry !== "string" || !entry) continue;
     if (entry === tool) return true;
+    // A bare tool name (`Bash`) must also match the SAME tool served through the
+    // hand, which reaches the model as `mcp__hand__bash`. Without this the gate
+    // fails OPEN for hand-backed agents: `ask: [Bash]` matched the harness's own
+    // `Bash` but never `mcp__hand__bash`, so bash ran unapproved. Case-insensitive
+    // so the `ask` vocabulary (`Bash`) lines up with the hand tool name (`bash`).
+    if (!entry.includes("/") && tool.toLowerCase() === `mcp__hand__${entry.toLowerCase()}`) return true;
     const [server, name] = entry.split("/");
     if (!server || !name) continue;
     if (name === "*") {

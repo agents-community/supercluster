@@ -13,7 +13,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { startTurnSpan } from "./otel.mjs";
-import { actorIdentity } from "./identity.mjs";
+import { actorIdentity, setHandURL } from "./identity.mjs";
 
 export function createRuntime({ workdir, spec, harness, identity }) {
   const EVENT_LOG = `${workdir}/events.jsonl`;
@@ -371,17 +371,26 @@ export function createRuntime({ workdir, spec, harness, identity }) {
       }
       return [...out.values()];
     },
-    setResolvedOptions({ disallowedTools }) {
+    setResolvedOptions({ disallowedTools, handMcpUrl }) {
       const before = resolvedDisallow.length;
       const merged = new Set(resolvedDisallow);
       for (const t of disallowedTools || []) {
         if (typeof t === "string" && t) merged.add(t);
       }
       resolvedDisallow = [...merged];
+      // The broker: serve pushes the hand MCP URL so the harness dials the
+      // broker instead of the hand directly. Read via handURL() when the harness
+      // builds options at the start of a turn, so a push before the first turn
+      // takes effect on that turn.
+      if (typeof handMcpUrl === "string" && handMcpUrl) setHandURL(handMcpUrl);
       // The harness reads this when it builds options, which happens at the
       // start of a turn — so a push mid-session takes effect on the next turn,
       // not the one in flight.
-      return { disallowedTools: resolvedDisallow.length, added: resolvedDisallow.length - before };
+      return {
+        disallowedTools: resolvedDisallow.length,
+        added: resolvedDisallow.length - before,
+        handMcpUrl: !!handMcpUrl,
+      };
     },
   };
 }

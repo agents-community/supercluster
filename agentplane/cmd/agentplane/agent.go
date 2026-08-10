@@ -20,9 +20,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"slices"
@@ -77,6 +77,16 @@ func agentCreate(sc sessionCtx, args []string) {
 	spec, err := agentspec.Load(*file)
 	if err != nil {
 		log.Fatalf("agent create: %v", err)
+	}
+	// Same rule as the serve path: the brain image is resolved from the harness
+	// when the spec omits it, so an author never pins a per-deployment digest.
+	if spec.Image == "" {
+		img := brainImageFor(spec.Harness)
+		if img == "" {
+			log.Fatalf("agent create: no brain image for harness %q — set image: in the spec, "+
+				"or export AGENTPLANE_BRAIN_IMAGE_* (e.g. `source infra/config.env`)", spec.Harness)
+		}
+		spec.Image = img
 	}
 	tmpl, err := spec.CompileTemplate(sc.templateNS, os.Getenv("AGENTPLANE_BUCKET"))
 	if err != nil {
@@ -238,6 +248,25 @@ func templateHarnesses(ctx context.Context, sc sessionCtx) (map[string]string, e
 				harness = "-"
 			}
 			m[name] = harness
+		}
+	}
+	return m, nil
+}
+
+// templateModels maps template name -> model, read from the agentplane.io/model
+// annotation (a model can contain '/', so it can't be a label). Empty when an
+// agent declares no model (the harness default applies).
+func templateModels(ctx context.Context, sc sessionCtx) (map[string]string, error) {
+	out, err := runKubectl(ctx, "get", "actortemplates", "-n", sc.templateNS,
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.metadata.annotations.agentplane\.io/model}{"\n"}{end}`)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name, model, _ := strings.Cut(line, " ")
+		if name != "" {
+			m[name] = model
 		}
 	}
 	return m, nil
@@ -514,23 +543,20 @@ func createSession(ctx context.Context, sc sessionCtx, agent, user string, v *va
 		//
 		// Bounded and non-fatal: on timeout we continue and let the self-heal
 		// cover it, because a slow hand should delay a session, never fail one.
-		waitHandReady(ctx, sc, sid, handReadyTimeout)
+		//
+		// With the broker, the brain connects to the broker (not the hand), and
+		// the broker resumes the hand on the first exec — so there is no gateway
+		// to wait on and this wait is skipped.
+		if sc.brokerMCPBase == "" {
+			waitHandReady(ctx, sc, sid, handReadyTimeout)
+		}
 
-		// Tell the hand who it is: the actor has no ambient identity (no env,
-		// no hostname, and the routed hop drops the Host header), so span
-		// attribution depends on this push. Best-effort like the rest.
-		if err := pushHandIdentity(ctx, sc, sid); err != nil {
-			log.Printf("warn: push hand identity for %s: %v", sid, err)
-		}
-		// Hand-as-gateway: federate the agent's OWN MCP servers through the hand
-		// (with any credentials) so the brain — which connects only to the hand —
-		// sees those tools too. Best-effort: on failure the hand still serves its
-		// own bash/fs tools. Must happen here, before the first message, because
-		// the brain lists tools when it connects.
+		// Federated MCP (a user's own MCP servers) is not re-homed in the broker
+		// yet — it used to be federated through the in-actor gateway, which
+		// hand-v15 no longer runs. `federated` stays empty until the broker
+		// federates upstreams; non-federated agents are unaffected. See the broker
+		// README / threat-model for the deferred item.
 		federated := map[string][]string{}
-		if err := injectHandUpstreams(ctx, sc, sid, agent, user, v, federated); err != nil {
-			log.Printf("warn: federate hand upstreams for %s: %v", sid, err)
-		}
 		// Now that the upstreams' real tool names are known, translate the
 		// spec's tool policy into them and push it to the brain (#58). Must
 		// precede the first message: the harness reads its options when it
@@ -583,37 +609,6 @@ func templateAllow(ctx context.Context, sc sessionCtx, agent string) []string {
 	return rt.Allow
 }
 
-// mcpSrv mirrors the mcp entries encoded in AGENTPLANE_SPEC (json tags), so we
-// can read them back off the template to federate them through the hand.
-type mcpSrv struct {
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
-	// HeadersFrom holds vault credential NAMES, not values (#46). Serve
-	// resolves them per session for the user who created it, so the secret
-	// never lives on the template, in agent version history, or in a snapshot.
-	HeadersFrom map[string]agentspec.CredentialRef `json:"headersFrom,omitempty"`
-}
-
-// templateMCP reads the agent template's embedded spec and returns its mcp map.
-func templateMCP(ctx context.Context, sc sessionCtx, agent string) (map[string]mcpSrv, error) {
-	out, err := runKubectl(ctx, "get", "actortemplate", "-n", sc.templateNS,
-		"-o", `jsonpath={.spec.containers[0].env[?(@.name=="AGENTPLANE_SPEC")].value}`, "--", agent)
-	if err != nil {
-		return nil, err
-	}
-	raw := strings.TrimSpace(string(out))
-	if raw == "" {
-		return nil, nil
-	}
-	var rt struct {
-		MCP map[string]mcpSrv `json:"mcp"`
-	}
-	if err := json.Unmarshal([]byte(raw), &rt); err != nil {
-		return nil, err
-	}
-	return rt.MCP, nil
-}
-
 // templateCredentials reads the agent template's embedded spec and returns the
 // list of vault credential names its sessions declare.
 func templateCredentials(ctx context.Context, sc sessionCtx, agent string) ([]string, error) {
@@ -645,45 +640,6 @@ func templateCredentialNames(ctx context.Context, sc sessionCtx, agent string) [
 		return nil
 	}
 	return names
-}
-
-// postHandAdmin POSTs to one of the paired hand's admin routes, retrying while
-// the actor is still waking. Shared by the upstream and repository pushes so
-// both get the same wake tolerance.
-func postHandAdmin(ctx context.Context, sc sessionCtx, sid, path string, body []byte) (string, error) {
-	hand := naming.HandActor(sid)
-	endpoint := fmt.Sprintf("http://%s%s", sc.atenet, path)
-	adminAuth := adminAuthHeader(sid) // session-scoped grant, not the fleet token (#74)
-	var lastErr error
-	for attempt := 1; attempt <= 4; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-		if err != nil {
-			return "", err
-		}
-		req.Host = naming.ActorDNS(hand, sc.atespace)
-		req.Header.Set("Content-Type", "application/json")
-		if adminAuth != "" {
-			req.Header.Set("Authorization", adminAuth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			out, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-			resp.Body.Close()
-			if resp.StatusCode < 400 {
-				return strings.TrimSpace(string(out)), nil
-			}
-			if resp.StatusCode < 500 {
-				return "", fmt.Errorf("hand rejected %s: HTTP %d", path, resp.StatusCode)
-			}
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-		} else {
-			lastErr = err
-		}
-		if attempt < 4 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
-		}
-	}
-	return "", fmt.Errorf("hand %s unreachable after retries: %w", path, lastErr)
 }
 
 // templateRepositories reads the agent's declared repositories off the template.
@@ -735,52 +691,71 @@ func injectHandRepositories(ctx context.Context, sc sessionCtx, sid, agent, gran
 		}
 		cred = r.Credential
 	}
-	body, _ := json.Marshal(map[string]any{
-		"proxyBase": proxyBase, "grant": grant, "credential": cred, "repositories": repos,
-	})
-	resp, err := postHandAdmin(ctx, sc, sid, "/admin/repositories", body)
+	// Configure git in the zone and clone, run via ExecActor (the executor is
+	// outside the sandbox now — there is no in-actor gateway to POST to). The
+	// grant travels in git's extraHeader; git-proxy exchanges it for the real
+	// token OUTSIDE the actor, so the credential never enters actor memory (#49).
+	ctrl, closeFn, err := sc.dial()
 	if err != nil {
-		return err
+		return fmt.Errorf("dial control plane: %w", err)
 	}
-	log.Printf("session %s: repositories pushed to the hand (%d declared) — %s", sid, len(repos), resp)
+	defer closeFn()
+	hand := naming.HandActor(sid)
+	base := strings.TrimSuffix(proxyBase, "/")
+
+	// git config --global … (each a separate exec; --global writes ~/.gitconfig
+	// in the zone, which persists in the actor's fs delta across suspend/resume).
+	gitCfg := [][]string{
+		{"git", "config", "--global", "credential." + base + ".helper", ""},
+		{"git", "config", "--global", "url." + base + "/gh/.insteadOf", "https://github.com/"},
+		{"git", "config", "--global", "--replace-all", "http.extraHeader", "X-Agentplane-Grant: " + grant},
+	}
+	if cred != "" {
+		gitCfg = append(gitCfg, []string{"git", "config", "--global", "--add", "http.extraHeader", "X-Agentplane-Credential: " + cred})
+	}
+	for _, argv := range gitCfg {
+		if _, err := execInHand(ctx, ctrl, sc.atespace, hand, "exec", argv, "/workspace", nil, 30000); err != nil {
+			return fmt.Errorf("git config in hand: %w", err)
+		}
+	}
+	// Clone each declared repo, idempotently (durable /workspace may already hold
+	// a checkout from a prior run — never clobber uncommitted work).
+	for _, r := range repos {
+		if r.URL == "" {
+			continue
+		}
+		dir := r.MountPath
+		if dir == "" {
+			dir = repoDirFromURL(r.URL)
+		}
+		script := fmt.Sprintf(`[ -e %q ] && echo "exists: %s" || git clone %q %q`, dir, dir, r.URL, dir)
+		res, err := execInHand(ctx, ctrl, sc.atespace, hand, "exec", []string{"/bin/sh", "-c", script}, "/workspace", nil, 120000)
+		if err != nil {
+			return fmt.Errorf("clone %s: %w", r.URL, err)
+		}
+		if res.GetExitCode() != 0 {
+			se := string(res.GetStderr())
+			if len(se) > 200 {
+				se = se[:200]
+			}
+			log.Printf("warn: session %s clone %s exit %d: %s", sid, r.URL, res.GetExitCode(), se)
+		}
+	}
+	log.Printf("session %s: git configured + %d repositories cloned via ExecActor", sid, len(repos))
 	return nil
 }
 
-// injectHandUpstreams pushes the agent's mcp servers to the paired hand's
-// /admin/upstreams over atenet. The hand connects outward to each (attaching the
-// credential) and re-publishes their tools as its own. Retries the wake race —
-// the hand may be cold, and the POST triggers atenet's auto-resume.
-// resolveHeaders looks up each headersFrom reference in the caller's vault and
-// renders it into a header value. Missing entries are skipped with a warning
-// rather than failing the session: an upstream the user has not connected yet
-// should degrade to "that tool needs auth", not "no session for you".
-func resolveHeaders(ctx context.Context, v *vault, user, srvName string, srv mcpSrv) map[string]string {
-	if len(srv.HeadersFrom) == 0 {
-		return srv.Headers
+// repoDirFromURL derives a checkout directory from a repo URL (the last path
+// segment, minus a trailing .git) when the spec does not name one.
+func repoDirFromURL(u string) string {
+	u = strings.TrimSuffix(strings.TrimSuffix(u, "/"), ".git")
+	if i := strings.LastIndex(u, "/"); i >= 0 {
+		u = u[i+1:]
 	}
-	out := map[string]string{}
-	for k, val := range srv.Headers {
-		out[k] = val
+	if u == "" {
+		return "repo"
 	}
-	if v == nil {
-		log.Printf("warn: mcp %q needs vault credentials but the vault is disabled", srvName)
-		return out
-	}
-	for header, ref := range srv.HeadersFrom {
-		p, err := v.access(ctx, user, ref.Credential)
-		if err != nil || p.Value == "" {
-			log.Printf("warn: mcp %q header %q: no vault credential %q for %s — upstream will be unauthenticated",
-				srvName, header, ref.Credential, user)
-			continue
-		}
-		out[header] = ref.Render(p.Value)
-		// Names and provenance only — never the value. "Did my credential get
-		// attached?" is the first question when an upstream 401s, and answering
-		// it should not require logging the secret to find out.
-		log.Printf("mcp %q: header %q resolved from vault credential %q for %s (%d bytes)",
-			srvName, header, ref.Credential, user, len(p.Value))
-	}
-	return out
+	return u
 }
 
 // pendingDeny holds resolved tool policy between session create (where the
@@ -916,14 +891,39 @@ func resolveFederatedDeny(allow []string, federated map[string][]string) []strin
 	return deny
 }
 
-// pushBrainOptions hands the resolved restrictions to the brain. Best-effort by
-// necessity — but the failure direction matters: without it the brain keeps the
-// spec's policy, so a missed push is a missing restriction, never an opening.
-func pushBrainOptions(ctx context.Context, sc sessionCtx, sid string, deny []string) error {
-	if len(deny) == 0 {
+// brokerHandURL is the URL the brain should dial for its hand when the broker is
+// enabled: the broker's MCP endpoint, carrying the real hand's actor MCP URL as
+// the ?hand= target so the broker knows which hand to forward to.
+func brokerHandURL(sc sessionCtx, sid string) string {
+	if sc.brokerMCPBase == "" {
+		return ""
+	}
+	hand := naming.HandActor(sid)
+	handMCP := fmt.Sprintf("http://%s/mcp", naming.ActorDNS(hand, sc.atespace))
+	sep := "?"
+	if strings.Contains(sc.brokerMCPBase, "?") {
+		sep = "&"
+	}
+	return sc.brokerMCPBase + sep + "hand=" + url.QueryEscape(handMCP)
+}
+
+// pushBrainOptions hands the resolved restrictions and (when the broker is
+// enabled) the hand MCP URL to the brain. Best-effort by necessity — but the
+// failure direction matters: without it the brain keeps the spec's policy and
+// dials the hand directly, so a missed push is a missing restriction / a
+// bypassed broker, never an opening.
+func pushBrainOptions(ctx context.Context, sc sessionCtx, sid string, deny []string, handMcpURL string) error {
+	if len(deny) == 0 && handMcpURL == "" {
 		return nil
 	}
-	body, _ := json.Marshal(map[string]any{"disallowedTools": deny})
+	payload := map[string]any{}
+	if len(deny) > 0 {
+		payload["disallowedTools"] = deny
+	}
+	if handMcpURL != "" {
+		payload["handMcpUrl"] = handMcpURL
+	}
+	body, _ := json.Marshal(payload)
 	brain := naming.BrainActor(sid)
 	url := fmt.Sprintf("http://%s/v1/sessions/%s/options", sc.atenet, brain)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -940,123 +940,8 @@ func pushBrainOptions(ctx context.Context, sc sessionCtx, sid string, deny []str
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("brain rejected options: HTTP %d", resp.StatusCode)
 	}
-	log.Printf("session %s: %d federated tool(s) denied by spec policy", sid, len(deny))
+	log.Printf("session %s: pushed options (%d federated deny, broker=%t)", sid, len(deny), handMcpURL != "")
 	return nil
-}
-
-// federated maps upstream name -> tool names, filled in by injectHandUpstreams
-// so the caller can turn spec-level tool policy into runtime tool names (#58).
-func injectHandUpstreams(ctx context.Context, sc sessionCtx, sid, agent, user string, v *vault, federated map[string][]string) error {
-	mcp, err := templateMCP(ctx, sc, agent)
-	if err != nil || len(mcp) == 0 {
-		return err // nothing to federate — the hand still serves its own tools
-	}
-	type upstream struct {
-		Name    string            `json:"name"`
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers,omitempty"`
-	}
-	ups := make([]upstream, 0, len(mcp))
-	for name, cfg := range mcp {
-		ups = append(ups, upstream{
-			Name: name, URL: cfg.URL,
-			Headers: resolveHeaders(ctx, v, user, name, cfg),
-		})
-	}
-	body, _ := json.Marshal(map[string]any{"upstreams": ups})
-	hand := naming.HandActor(sid)
-	url := fmt.Sprintf("http://%s/admin/upstreams", sc.atenet)
-	adminAuth := adminAuthHeader(sid) // session-scoped grant, not the fleet token (#74)
-
-	var lastErr error
-	for attempt := 1; attempt <= 4; attempt++ {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		req.Host = naming.ActorDNS(hand, sc.atespace)
-		req.Header.Set("Content-Type", "application/json")
-		if adminAuth != "" {
-			req.Header.Set("Authorization", adminAuth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil && resp.StatusCode < 500 {
-			out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return fmt.Errorf("hand rejected upstreams: HTTP %d", resp.StatusCode)
-			}
-			// The hand answers with the tools each upstream actually exposes.
-			// Those names exist nowhere else — the spec was compiled before any
-			// upstream was dialled — so this is the only chance to learn them.
-			var reg struct {
-				Registered []struct {
-					Name  string   `json:"name"`
-					Tools []string `json:"tools"`
-				} `json:"registered"`
-			}
-			if json.Unmarshal(out, &reg) == nil {
-				for _, u := range reg.Registered {
-					federated[u.Name] = u.Tools
-				}
-			}
-			return nil
-		}
-		if resp != nil {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-		} else {
-			lastErr = err
-		}
-		if attempt < 4 {
-			select {
-			case <-time.After(3 * time.Second):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-	return lastErr
-}
-
-// pushHandIdentity tells the freshly created hand which session it belongs to
-// via its admin plane — the actor itself has no ambient identity, and span
-// attribution (hand.tool → agentplane.session) depends on it. Same wake-race
-// retry shape as the other admin pushes.
-func pushHandIdentity(ctx context.Context, sc sessionCtx, sid string) error {
-	hand := naming.HandActor(sid)
-	body, _ := json.Marshal(map[string]string{"session": sid, "actor": hand})
-	url := fmt.Sprintf("http://%s/admin/identity", sc.atenet)
-	adminAuth := adminAuthHeader(sid) // session-scoped grant, not the fleet token (#74)
-
-	var lastErr error
-	for attempt := 1; attempt <= 4; attempt++ {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		req.Host = naming.ActorDNS(hand, sc.atespace)
-		req.Header.Set("Content-Type", "application/json")
-		if adminAuth != "" {
-			req.Header.Set("Authorization", adminAuth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil && resp.StatusCode < 500 {
-			resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return fmt.Errorf("hand rejected identity: HTTP %d", resp.StatusCode)
-			}
-			return nil
-		}
-		if resp != nil {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-		} else {
-			lastErr = err
-		}
-		if attempt < 4 {
-			select {
-			case <-time.After(3 * time.Second):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-	return lastErr
 }
 
 // agentWantsHand reports whether the agent template is labeled for a paired hand.

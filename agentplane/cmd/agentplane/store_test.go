@@ -185,7 +185,7 @@ func TestUsageCaptureSkipsWhenClientAbsent(t *testing.T) {
 // ever worked for test names without a dot or an @.
 func TestUserTagIsLabelSafe(t *testing.T) {
 	for _, u := range []string{
-		"dharamendra.kumar@outlook.com", "a+b@example.co.uk", "UPPER@Example.COM", "alice",
+		"first.last@example.com", "a+b@example.co.uk", "UPPER@Example.COM", "alice",
 	} {
 		tag := userTag(u)
 		if tag == "" {

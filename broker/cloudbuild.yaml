@@ -1,0 +1,4 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${IMAGE_REPO}/agentplane-broker:${BROKER_TAG}', '.']
+images: ['${IMAGE_REPO}/agentplane-broker:${BROKER_TAG}']

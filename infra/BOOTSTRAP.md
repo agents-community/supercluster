@@ -25,7 +25,7 @@ Put the id and number into `config.env`.
 ## 2. The cluster — three settings are not optional
 
 ```bash
-gcloud container clusters create substrate-poc \
+gcloud container clusters create "$CLUSTER_NAME" \
   --location=us-central1-c \
   --release-channel=stable \
   --enable-dataplane-v2 \
@@ -42,7 +42,7 @@ gcloud container clusters create substrate-poc \
 **Then immediately:**
 
 ```bash
-gcloud container clusters update substrate-poc --location=us-central1-c \
+gcloud container clusters update "$CLUSTER_NAME" --location=us-central1-c \
   --update-addons=NodeLocalDNS=DISABLED
 ```
 

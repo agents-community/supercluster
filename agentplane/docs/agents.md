@@ -1,16 +1,16 @@
 # Agents — AgentSpec & lifecycle
 
-An **agent** is a named, immutable definition: harness + image + behavior
-config. A **session** is a durable mind minted *from* an agent. Underneath,
-agent = Substrate `ActorTemplate`, session = actor — but you only ever touch
-the AgentSpec.
+An **agent** is a named, immutable definition: harness + behavior config. A
+**session** is a durable mind minted *from* an agent. Underneath, agent =
+Substrate `ActorTemplate`, session = actor — but you only ever touch the
+AgentSpec. The brain image is resolved by the platform from the harness, so it
+never appears in a spec.
 
 ## AgentSpec
 
 ```yaml
 name: tutor
 harness: claude-code          # or codex, pi (opencode: planned)
-image: gcr.io/…/agentplane-brain@sha256:…    # digest-pinned (required)
 systemPrompt: >-
   You are a patient math tutor. Keep answers short.
 turnDeadlineSeconds: 90       # watchdog: max wall-clock per turn
@@ -22,10 +22,9 @@ turnDeadlineSeconds: 90       # watchdog: max wall-clock per turn
 #   github: {url: https://…/mcp, headers: {Authorization: "Bearer …"}}
 ```
 
-Validation is strict where it protects you: the **image must be digest-pinned**
-(mutable tags would silently invalidate snapshots), names must be DNS-safe,
-harnesses must be known. The spec is translated to each harness's native
-config by the in-image adapter — the file above is vendor-neutral.
+Validation is strict where it protects you: names must be DNS-safe and harnesses
+must be known. The spec is translated to each harness's native config by the
+in-image adapter — the file above is vendor-neutral.
 
 ## Any model, one harness: pi
 

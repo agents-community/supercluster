@@ -84,6 +84,7 @@ const server = http.createServer(async (req, res) => {
     catch { res.writeHead(400); return res.end(JSON.stringify({ error: "invalid json" })); }
     const applied = rt.setResolvedOptions({
       disallowedTools: Array.isArray(body.disallowedTools) ? body.disallowedTools : [],
+      handMcpUrl: typeof body.handMcpUrl === "string" ? body.handMcpUrl : undefined,
     });
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify({ ok: true, ...applied }));

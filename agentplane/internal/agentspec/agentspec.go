@@ -25,9 +25,11 @@ import (
 type AgentSpec struct {
 	Name    string `yaml:"name"`
 	Harness string `yaml:"harness"` // claude-code (codex, opencode: planned)
-	// Image must be digest-pinned (@sha256:…) — Substrate invalidates snapshots
-	// on image change, so mutable tags are forbidden by construction.
-	Image        string            `yaml:"image"`
+	// Image is the brain image. Optional: leave it empty and serve resolves the
+	// image for the harness (it's a per-deployment artifact, not a user concern).
+	// When set it must be digest-pinned (@sha256:…) — Substrate invalidates
+	// snapshots on image change, so mutable tags are forbidden by construction.
+	Image        string            `yaml:"image,omitempty"`
 	SystemPrompt string            `yaml:"systemPrompt"`
 	Model        string            `yaml:"model,omitempty"`
 	MCP          map[string]MCPSrv `yaml:"mcp,omitempty"`
@@ -292,7 +294,12 @@ func (s *AgentSpec) Validate() error {
 		return fmt.Errorf("name must be a lowercase DNS-1123 label [a-z0-9-], no leading/trailing hyphen, got %q", s.Name)
 	case !harnessKnown:
 		return fmt.Errorf("unknown harness %q (known: claude-code, codex, pi)", s.Harness)
-	case !strings.Contains(s.Image, "@sha256:"):
+	// Image is optional in a user spec: the brain image is a per-deployment
+	// artifact keyed by harness, so serve resolves it when omitted (a digest in
+	// a user spec leaks an internal build and goes stale). When it IS given it
+	// must still be digest-pinned — Substrate invalidates snapshots on a mutable
+	// tag change.
+	case s.Image != "" && !strings.Contains(s.Image, "@sha256:"):
 		return fmt.Errorf("image must be digest-pinned (@sha256:…) — snapshots break otherwise")
 	case s.Harness == "pi" && s.Model != "" && !strings.Contains(s.Model, "/"):
 		return fmt.Errorf(`pi models are "provider/model-id" (e.g. anthropic/claude-haiku-4-5), got %q`, s.Model)
@@ -633,13 +640,21 @@ func (s *AgentSpec) CompileVersion(namespace, bucket, templateName string, versi
 	if s.Hand {
 		labels["agentplane.io/hand"] = "true" // serve pairs an h-<id> per session
 	}
+	// Model goes in an ANNOTATION, not a label: a pi model like
+	// "anthropic/claude-haiku-4-5" contains '/', which is illegal in a label
+	// value. serve reads it back to report the model on a session.
+	annotations := map[string]string{}
+	if s.Model != "" {
+		annotations["agentplane.io/model"] = s.Model
+	}
 	tmpl := map[string]any{
 		"apiVersion": "ate.dev/v1alpha1",
 		"kind":       "ActorTemplate",
 		"metadata": map[string]any{
-			"name":      templateName,
-			"namespace": namespace,
-			"labels":    labels,
+			"name":        templateName,
+			"namespace":   namespace,
+			"labels":      labels,
+			"annotations": annotations,
 		},
 		"spec": map[string]any{
 			"pauseImage": pauseImage,

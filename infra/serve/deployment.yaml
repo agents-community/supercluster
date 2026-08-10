@@ -32,6 +32,13 @@ spec:
         #   valueFrom: { secretKeyRef: { name: agentplane-serve-token, key: token } }
         - { name: SUBSTRATE_ATEAPI, value: "api.ate-system.svc:443" }
         - { name: SUBSTRATE_ATENET, value: "atenet-router.ate-system.svc:80" }
+        # The broker: when set, serve routes the brain through the broker (which
+        # mediates credentials + approval) instead of straight to the hand, by
+        # pushing the hand MCP URL to the brain at session start. Empty disables
+        # it — the brain dials the hand directly, exactly as before.
+        - { name: AGENTPLANE_BROKER_MCP, value: "http://broker.agentplane.svc/mcp" }
+        # The broker authenticates to /v1/internal/exec by its ServiceAccount
+        # (projected token, verified via TokenReview) — no shared secret (F15).
         - { name: BRAIN_TEMPLATE_NS, value: "agentplane" }
         # The hand template new sessions are paired with. Versioned because a
         # hand image change needs a fresh golden, and the original `hand`
@@ -41,6 +48,12 @@ spec:
         # tool-less. Rebaking under a new name avoids deleting the old
         # template out from under live sessions.
         - { name: BRAIN_HAND_TEMPLATE, value: "${HAND_TEMPLATE}" }
+        # Brain images per harness — resolved by serve when an AgentSpec omits
+        # `image:`, so authors never pin a per-deployment digest. Digest-pinned
+        # (mutable tags break snapshots).
+        - { name: AGENTPLANE_BRAIN_IMAGE_CLAUDE_CODE, value: "${BRAIN_CC_IMAGE}" }
+        - { name: AGENTPLANE_BRAIN_IMAGE_PI, value: "${BRAIN_PI_IMAGE}" }
+        - { name: AGENTPLANE_BRAIN_IMAGE_CODEX, value: "${BRAIN_CODEX_IMAGE}" }
         # Hand gateway: the shared token serve uses to inject federated MCP
         # upstreams + credentials into a session's hand (/admin/upstreams).
         # Grant-signing key — MUST differ from HAND_ADMIN_TOKEN (F3): that

@@ -43,15 +43,22 @@ type sessionCtx struct {
 	template   string
 	ateapi     string
 	atenet     string
+	// brokerMCPBase is the broker's MCP endpoint, e.g.
+	// "http://broker.agentplane.svc/mcp". When set, serve routes the brain
+	// through the broker instead of straight to the hand (the broker mediates
+	// credentials + approval). Empty disables the broker: the brain dials the
+	// hand directly, exactly as before.
+	brokerMCPBase string
 }
 
 func newSessionCtx() sessionCtx {
 	return sessionCtx{
-		atespace:   env("SUBSTRATE_ATESPACE", "agents"),
-		templateNS: env("BRAIN_TEMPLATE_NS", "agentplane"),
-		template:   env("BRAIN_TEMPLATE", "brain"),
-		ateapi:     env("SUBSTRATE_ATEAPI", "localhost:8080"),
-		atenet:     env("SUBSTRATE_ATENET", "localhost:8000"),
+		atespace:      env("SUBSTRATE_ATESPACE", "agents"),
+		templateNS:    env("BRAIN_TEMPLATE_NS", "agentplane"),
+		template:      env("BRAIN_TEMPLATE", "brain"),
+		ateapi:        env("SUBSTRATE_ATEAPI", "localhost:8080"),
+		atenet:        env("SUBSTRATE_ATENET", "localhost:8000"),
+		brokerMCPBase: env("AGENTPLANE_BROKER_MCP", ""),
 	}
 }
 

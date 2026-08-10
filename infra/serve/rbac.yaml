@@ -53,3 +53,27 @@ roleRef:
   kind: Role
   name: agentplane-serve
   apiGroup: rbac.authorization.k8s.io
+---
+# The broker's own identity. It authenticates to serve's /v1/internal/exec with a
+# projected token for this SA (F15) — no shared secret. No RBAC of its own.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentplane-broker
+  namespace: agentplane
+---
+# serve verifies the broker's SA token with a k8s TokenReview. Creating
+# TokenReviews is exactly the built-in system:auth-delegator ClusterRole — the
+# standard way a service delegates authentication to the API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentplane-serve-auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: agentplane-serve
+  namespace: agentplane
+roleRef:
+  kind: ClusterRole
+  name: system:auth-delegator
+  apiGroup: rbac.authorization.k8s.io

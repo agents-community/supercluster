@@ -33,3 +33,6 @@ site/
 .vscode/
 *.swp
 .DS_Store
+
+# Real per-account deploy values — use config.env.example as the template.
+infra/config.env

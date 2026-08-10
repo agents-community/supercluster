@@ -100,6 +100,17 @@ spec:
         matchLabels: { app: agentplane-gitproxy }
     ports:
     - { protocol: TCP, port: 8080 }
+  # the broker: brain→broker→hand. The brain dials broker.agentplane.svc for its
+  # hand MCP, and the broker mediates before forwarding. Without this the
+  # default-deny drops it (the internet rule below excludes in-cluster IPs), so
+  # the brain silently runs tool-less — exactly what happened before this rule.
+  # Port is the broker container port (8088), not the Service port, since egress
+  # policy matches the destination pod — same as gitproxy above.
+  - to:
+    - podSelector:
+        matchLabels: { app: agentplane-broker }
+    ports:
+    - { protocol: TCP, port: 8088 }
   # OTLP trace export. Found by `cilium monitor --type drop`: without this the
   # policy denied 527 packets to :4317 in two minutes, and the brain actor went
   # STATUS_CRASHED rather than degrading — a blocked exporter is not a

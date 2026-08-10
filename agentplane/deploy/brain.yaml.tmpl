@@ -1,7 +1,11 @@
-# agentplane brain deployment (gate 1) — substitute ${ANTHROPIC_API_KEY} and
-# ${BUCKET_NAME}, then apply THROUGH ko (the WorkerPool ateomImage is a ko:// ref):
+# agentplane brain deployment (gate 1) — substitute ${ANTHROPIC_API_KEY},
+# ${BUCKET_NAME} and ${BRAIN_IMAGE}, then apply THROUGH ko (the WorkerPool
+# ateomImage is a ko:// ref). BRAIN_IMAGE is the built brain-cc image, e.g.
+# "$IMAGE_REPO/agentplane-brain-cc@sha256:…" — never hardcode a project id here
+# (see infra/config.env):
 #
 #   sed -e "s|\${BUCKET_NAME}|$BUCKET_NAME|g" -e "s|\${ANTHROPIC_API_KEY}|$ANTHROPIC_API_KEY|g" \
+#       -e "s|\${BRAIN_IMAGE}|$BRAIN_IMAGE|g" \
 #     deploy/brain.yaml.tmpl | (cd ../substrate && ./hack/run-tool.sh ko apply -f -)
 #
 # Carries every fix from docs/GKE.md: explicit container command (#189 Args gap),
@@ -89,7 +93,7 @@ spec:
     # Additional agents: `agentplane agent create -f <spec>.yaml` (or POST
     # /v1/agents) — do NOT extend this file. Templates are immutable: changing
     # the image here requires delete+recreate (safe for suspended sessions).
-    image: gcr.io/project-28d42275-7fed-43e6-a9a/ate-images/agentplane-brain-cc@sha256:fdeb84a4a820d213296b6ec5b6d5284ee60de8b6011e46b8790ac70a99e72886
+    image: ${BRAIN_IMAGE}
     command: ["/entrypoint.sh"]
     env:
     - name: PORT

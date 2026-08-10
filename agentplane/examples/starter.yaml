@@ -1,6 +1,3 @@
-# NOTE: the image is digest-pinned and BOTH parts are per-account — replace
-# PROJECT_ID and the digest after building into your own project.
-# See infra/BOOTSTRAP.md step 8.
 # starter — the friendly default agent to try first. A capable, general-purpose
 # software engineer with a DURABLE mind: hand it any real task (build, fix,
 # refactor, migrate, explore a codebase) and it works in a persistent workspace
@@ -11,7 +8,6 @@
 name: starter
 harness: claude-code
 model: claude-sonnet-5
-image: gcr.io/PROJECT_ID/ate-images/agentplane-brain-cc@sha256:82a646ee7452ce56274b4d9bb2bf91dd4a28d72ad124a795768367c5b5d601df
 hand: true
 systemPrompt: >-
   You are a capable software engineer working in a persistent workspace that

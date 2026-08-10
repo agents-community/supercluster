@@ -19,7 +19,7 @@ what="${1:-all}"
 build() { # dir, config, tagvar
   local dir="$1" cfg="$2" tag="$3"
   echo "==> $dir ($cfg) → ${IMAGE_REPO}:${!tag}"
-  ( cd "$root/$dir" && envsubst '$IMAGE_REPO $SERVE_TAG $HAND_TAG $GITPROXY_TAG $BRAIN_CC_TAG $BRAIN_CODEX_TAG $BRAIN_PI_TAG' \
+  ( cd "$root/$dir" && envsubst '$IMAGE_REPO $SERVE_TAG $EXEC_TAG $GITPROXY_TAG $BROKER_TAG $BRAIN_CC_TAG $BRAIN_CODEX_TAG $BRAIN_PI_TAG' \
       < "$cfg" > /tmp/cloudbuild.rendered.yaml \
     && gcloud builds submit --config /tmp/cloudbuild.rendered.yaml . )
 }
@@ -40,8 +40,9 @@ build_serve_binary() {
 
 case "$what" in
   serve)    build_serve_binary; build infra/serve cloudbuild.yaml SERVE_TAG ;;
-  hand)     build hand              cloudbuild.yaml     HAND_TAG ;;
+  exec)     build hand/exec         cloudbuild.yaml     EXEC_TAG ;;
   gitproxy) build gitproxy          cloudbuild.yaml     GITPROXY_TAG ;;
+  broker)   build broker            cloudbuild.yaml     BROKER_TAG ;;
   brain-cc) build agentplane/brain  cloudbuild-cc.yaml    BRAIN_CC_TAG ;;
   brain-codex) build agentplane/brain cloudbuild-codex.yaml BRAIN_CODEX_TAG ;;
   brain-pi) build agentplane/brain  cloudbuild-pi.yaml      BRAIN_PI_TAG ;;
@@ -50,9 +51,8 @@ case "$what" in
     # the two on different versions — which is how auto-sleep died silently once.
     build_serve_binary
     build infra/serve       cloudbuild.yaml     SERVE_TAG
-    build hand              cloudbuild.yaml     HAND_TAG
     build gitproxy          cloudbuild.yaml     GITPROXY_TAG
     build agentplane/brain  cloudbuild-cc.yaml  BRAIN_CC_TAG
     ;;
-  *) echo "usage: $0 [serve|hand|gitproxy|brain-cc|brain-codex|brain-pi|all]" >&2; exit 2 ;;
+  *) echo "usage: $0 [serve|hand|exec|gitproxy|broker|brain-cc|brain-codex|brain-pi|all]" >&2; exit 2 ;;
 esac

@@ -229,10 +229,12 @@ func runServe(args []string) {
 	mux.HandleFunc("PUT /v1/credentials/{name}", s.auth(s.handleCredPut))
 	mux.HandleFunc("GET /v1/credentials", s.auth(s.handleCredList))
 	mux.HandleFunc("DELETE /v1/credentials/{name}", s.auth(s.handleCredDelete))
-	// Hand-pull: the HAND presents its session grant (not a user token) to fetch
-	// a credential value. Grant-authed inside the handler, so NOT wrapped in auth.
+	// Hand-pull: git-proxy presents a session grant (not a user token) to fetch a
+	// credential value outside the sandbox. Grant-authed inside the handler.
 	mux.HandleFunc("GET /v1/hand/credentials/{name}", s.handleHandCredPull)
-	mux.HandleFunc("GET /v1/hand/admin-verify", s.handleHandAdminVerify)
+	// Internal: the broker runs commands in an actor via ExecActor (runsc exec),
+	// keeping the executor outside the sandbox. Internal-token authed inside.
+	mux.HandleFunc("POST /v1/internal/exec", s.handleInternalExec)
 	// Talk to a session: POST a message, GET /message/stream to watch it work
 	// (assistant text + tool activity, harness-neutral). GET /message is history.
 	mux.HandleFunc("POST /v1/sessions/{id}/message", s.auth(s.handleSend))
@@ -531,6 +533,22 @@ func (s *server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 // handleAgentCreate accepts an AgentSpec (YAML or JSON) and applies it.
 // Returns 202 immediately — the golden bake takes ~30s; poll GET /v1/agents
 // until phase is Ready. Sync-wait here would be a worse API than polling.
+// brainImageFor returns the digest-pinned brain image for a harness, read from
+// serve's environment. This keeps the image — a per-deployment build artifact —
+// out of user specs; an explicit spec.Image still overrides it. Empty means the
+// operator hasn't configured that harness.
+func brainImageFor(harness string) string {
+	switch harness {
+	case "claude-code":
+		return os.Getenv("AGENTPLANE_BRAIN_IMAGE_CLAUDE_CODE")
+	case "pi":
+		return os.Getenv("AGENTPLANE_BRAIN_IMAGE_PI")
+	case "codex":
+		return os.Getenv("AGENTPLANE_BRAIN_IMAGE_CODEX")
+	}
+	return ""
+}
+
 func (s *server) handleAgentCreate(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
 	if err != nil {
@@ -550,6 +568,19 @@ func (s *server) handleAgentCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
 			"agent name %q ends in a version suffix, which is reserved for agent versions", spec.Name))
 		return
+	}
+	// The brain image is a per-deployment artifact keyed by harness, not something
+	// an agent author should pin (a digest in a user spec leaks an internal build
+	// and goes stale). Resolve it here when the spec omits it; an explicit image
+	// still wins.
+	if spec.Image == "" {
+		img := brainImageFor(spec.Harness)
+		if img == "" {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"no brain image configured for harness %q — set image: in the spec or configure serve", spec.Harness))
+			return
+		}
+		spec.Image = img
 	}
 	if s.agents == nil {
 		s.createAgentUnversioned(w, r, spec, raw)
@@ -808,9 +839,13 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if hm, err := templateHarnesses(r.Context(), s.sc); err == nil {
 		harness = hm[template]
 	}
+	model := ""
+	if mm, err := templateModels(r.Context(), s.sc); err == nil {
+		model = mm[template]
+	}
 	span(r).SetAttributes(attribute.String("agentplane.session", sid), attribute.String("agentplane.agent", in.Agent))
 	s.log.Info("session created", "session", sid, "agent", in.Agent, "harness", harness, "user", userOf(r))
-	writeJSON(w, http.StatusCreated, map[string]string{"id": sid, "agent": in.Agent, "harness": harness})
+	writeJSON(w, http.StatusCreated, map[string]string{"id": sid, "agent": in.Agent, "harness": harness, "model": model})
 }
 
 func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
@@ -822,10 +857,12 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	harnesses, _ := templateHarnesses(r.Context(), s.sc) // best-effort enrich
+	models, _ := templateModels(r.Context(), s.sc)       // best-effort enrich
 	type item struct {
 		ID      string `json:"id"`
 		Agent   string `json:"agent"`
 		Harness string `json:"harness"`
+		Model   string `json:"model"`
 		Status  string `json:"status"`
 	}
 	logicalAgents, _ := templateAgents(r.Context(), s.sc) // best-effort enrich
@@ -843,7 +880,7 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 			agent = logical
 		}
 		items = append(items, item{ID: sid, Agent: agent, Harness: harnesses[tmplName],
-			Status: derivedStatus(s.sc, name, a.GetStatus().String())})
+			Model: models[tmplName], Status: derivedStatus(s.sc, name, a.GetStatus().String())})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
 }
@@ -859,6 +896,7 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	harnesses, _ := templateHarnesses(r.Context(), s.sc) // best-effort enrich
+	models, _ := templateModels(r.Context(), s.sc)       // best-effort enrich
 	for _, a := range actors {
 		if a.GetMetadata().GetName() != brain {
 			continue
@@ -873,7 +911,7 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 				agentName = logical
 			}
 		}
-		out := map[string]any{"id": sid, "agent": agentName, "harness": harnesses[tmplName]}
+		out := map[string]any{"id": sid, "agent": agentName, "harness": harnesses[tmplName], "model": models[tmplName]}
 		// Stored metadata first: it is readable while the mind SLEEPS, which the
 		// live probe below is not (probing resumes a suspended actor, undoing
 		// the auto-sleep that just saved the worker). A sleeping session used to
@@ -1065,19 +1103,28 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 	//
 	// createSession already waits for the hand; the wake path did not. Bounded
 	// and non-fatal: a slow hand should delay the first turn, never lose it.
-	if st, err := s.actorStatus(r.Context(), brain); err == nil && st != "STATUS_RUNNING" {
-		waitHandReady(r.Context(), s.sc, sid, handReadyTimeout)
+	// With the broker, the hand needs no gateway to be "ready" — the broker
+	// resumes it on the first exec. Waiting on the (now absent) gateway /healthz
+	// would just burn the timeout, so skip it.
+	if s.sc.brokerMCPBase == "" {
+		if st, err := s.actorStatus(r.Context(), brain); err == nil && st != "STATUS_RUNNING" {
+			waitHandReady(r.Context(), s.sc, sid, handReadyTimeout)
+		}
 	}
-	// Apply tool policy resolved at session create (#58). Here rather than at
+	// Apply tool policy resolved at session create (#58) and, when the broker is
+	// enabled, point the brain at the broker for its hand. Here rather than at
 	// create because the brain wakes on the first message — pushing earlier
 	// reliably 504s. It must land BEFORE the message is relayed: the harness
-	// reads its options when it starts.
-	if deny := takeFederatedDeny(sid); len(deny) > 0 {
-		if err := pushBrainOptions(r.Context(), s.sc, sid, deny); err != nil {
-			// The brain keeps the spec's own policy, so this is a restriction we
-			// failed to add rather than an opening — but say so loudly.
-			s.log.Warn("session runs WITHOUT federated tool restrictions",
-				"session", sid, "count", len(deny), "err", err)
+	// reads its options (and handURL) when it starts.
+	deny := takeFederatedDeny(sid)
+	handMcpURL := brokerHandURL(s.sc, sid)
+	if len(deny) > 0 || handMcpURL != "" {
+		if err := pushBrainOptions(r.Context(), s.sc, sid, deny, handMcpURL); err != nil {
+			// The brain keeps the spec's own policy and dials the hand directly,
+			// so this is a restriction we failed to add / a broker we failed to
+			// interpose, never an opening — but say so loudly.
+			s.log.Warn("session options push failed (no federated restrictions / broker not interposed)",
+				"session", sid, "deny", len(deny), "broker", handMcpURL != "", "err", err)
 		}
 	}
 	for attempt := 1; attempt <= 4; attempt++ {
