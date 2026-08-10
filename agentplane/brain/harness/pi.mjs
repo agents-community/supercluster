@@ -116,7 +116,14 @@ async function handToolDefinitions(ctx) {
     import("@modelcontextprotocol/sdk/client/streamableHttp.js"),
   ]);
   const client = new Client({ name: "agentplane-pi", version: "1.0.0" }, { capabilities: {} });
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+  // Pass the agent's MCP upstreams to the broker as config — the broker (not the
+  // brain) is the MCP client to them, and returns their tools in listTools below.
+  const headers = {};
+  if (ctx.spec.mcp && Object.keys(ctx.spec.mcp).length) {
+    headers["x-agentplane-mcp"] = Buffer.from(JSON.stringify(ctx.spec.mcp)).toString("base64");
+  }
+  await client.connect(new StreamableHTTPClientTransport(
+    new URL(url), Object.keys(headers).length ? { requestInit: { headers } } : undefined));
   const { tools } = await client.listTools();
 
   const allow = handNames(ctx.spec.allow);
@@ -169,10 +176,6 @@ export const pi = {
   async *run(inputs, ctx) {
     const pkg = await import("@earendil-works/pi-coding-agent");
     const { createAgentSession, SessionManager, DefaultResourceLoader, ModelRuntime, getAgentDir } = pkg;
-
-    if (ctx.spec.mcp && Object.keys(ctx.spec.mcp).length) {
-      console.error("pi harness: spec.mcp is not supported yet (pi uses extensions) — ignoring");
-    }
 
     const modelRuntime = await ModelRuntime.create();
     let model, provider = "anthropic";

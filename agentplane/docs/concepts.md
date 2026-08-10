@@ -36,10 +36,9 @@ Use it to make a behavior repeatable and shareable, not re-specified per session
 
 **The harness is the agent loop that turns messages into tool calls.**
 
-AgentPlane supports the **claude-code** and **pi** harnesses; a session's agent
-picks one. The harness holds the conversation and decides which tools to call —
-it is *our* trusted code and runs in the brain, never the sandbox. See the
-[harness interface](harness-interface.md).
+AgentPlane supports the **claude-code**, **pi**, and **codex** harnesses; a
+session's agent picks one. The harness holds the conversation and decides which
+tools to call — it is trusted code and runs in the brain, never the sandbox.
 
 ## Brain and hand
 
@@ -58,7 +57,7 @@ The broker is a plain pod between brain and hand. When the model calls a tool,
 the broker runs it in the hand via the control plane's `ExecActor` (`runsc
 exec`) — so the runtime lives *outside* gVisor and the hand carries none of it.
 The broker also applies credentials before forwarding. See the
-[threat model](threat-model/README.md) for why this boundary matters.
+[architecture](architecture.md) for how the pieces fit together.
 
 ## Tools
 
@@ -67,6 +66,11 @@ The broker also applies credentials before forwarding. See the
 Every agent gets `bash`, `read`, `write`, `list`, `edit`, `glob`, and `grep`,
 executed in `/workspace` inside the hand. An agent's spec narrows them with
 `allow`/`deny`.
+
+**External MCP servers extend the tool set.** An agent's `mcp:` servers are
+federated by the broker — it connects to them as an MCP client and exposes their
+tools alongside the built-ins (as `mcp__hand__<server>__<tool>`). The brain never
+connects to an MCP server directly; all external MCP is mediated by the broker.
 
 ## Approvals
 
@@ -89,9 +93,8 @@ Use it for tools whose effects you want to see before they happen.
 **Secrets are injected outside the sandbox, never checkpointed.**
 
 Store third-party credentials in the per-user vault (`PUT /v1/credentials`);
-values are write-only. An agent references one by name, and for git the token is
-attached by the git-proxy *outside* the actor — so it never enters actor memory
-or a snapshot.
+values are write-only and returned only as names. An agent references one by
+name, and serve resolves it per session for that agent.
 
 ## Observability
 

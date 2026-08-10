@@ -139,8 +139,7 @@ curl -s "$AGENTPLANE_URL/v1/credentials" -H "authorization: Bearer $AGENTPLANE_T
 ```
 
 An agent references a credential by name (see [AgentSpec](agents.md)); serve
-resolves it per session and the git-proxy attaches it to outbound git traffic
-without it ever landing in the workspace or a checkpoint.
+resolves it per session for that agent.
 
 ## Session lifecycle
 

@@ -41,7 +41,7 @@ histogram_quantile(0.95,
 serve initializes an OTLP **metric** exporter whenever
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set (same var as traces); unset = no-op, zero
 overhead. In-cluster it points at the managed collector; locally, at your
-port-forwarded one. Verified live: a cold send records into the `cold="true"`
+port-forwarded one. A cold send records into the `cold="true"`
 series (~2.3s, 3s bucket) while warm sends stay sub-second.
 
 ## LLM-level monitoring (Claude Code telemetry)

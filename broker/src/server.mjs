@@ -17,6 +17,7 @@ import { trace } from "@opentelemetry/api";
 import { initOtel, contextFromHeaders, withSpan } from "./otel.mjs";
 import { execActor } from "./serve-exec.mjs";
 import { TOOL_DEFS, TOOL_NAMES, runTool } from "./tools.mjs";
+import { parseUpstreams, federate } from "./federation.mjs";
 
 initOtel(); // start tracing before anything runs (no-op if OTEL endpoint unset)
 
@@ -30,7 +31,7 @@ const PORT = Number(process.env.PORT || 8088);
 // (emitting the approval event) BEFORE the call ever reaches the broker. So the
 // broker is a pure executor; adding a second policy here would be a redundant,
 // drifting copy of the harness's.
-function buildServer(handActor, reqCtx) {
+async function buildServer(handActor, upstreams, reqCtx) {
   const server = new Server(
     { name: "agentplane-broker", version: "0.1.0" },
     { capabilities: { tools: {} } },
@@ -38,12 +39,25 @@ function buildServer(handActor, reqCtx) {
   const span = trace.getSpan(reqCtx);
   const exec = (argv, opts = {}) => execActor(handActor, argv, opts);
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
+  // Federate the agent's MCP upstreams (if any). The broker is the only MCP
+  // client to them; their tools are advertised alongside the hand's.
+  const fed = await federate(upstreams);
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOL_DEFS, ...fed.defs] }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args = {} } = req.params;
     try { span?.setAttribute("agentplane.tool", name); } catch { /* best-effort */ }
     console.log(`call ${name} (hand ${handActor})`);
+    // Federated (upstream) tool → forward to its MCP server.
+    if (fed.has(name)) {
+      try {
+        return await fed.call(name, args);
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: `[broker] ${name} (upstream) failed: ${e.message}` }] };
+      }
+    }
+    // Otherwise a hand tool → run it in the actor.
     if (!TOOL_NAMES.has(name)) {
       return { isError: true, content: [{ type: "text", text: `[broker] unknown tool: ${name}` }] };
     }
@@ -87,10 +101,11 @@ const httpServer = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ error: "no hand target (x-ate-hand-url header or ?hand=)" }));
   }
 
+  const upstreams = parseUpstreams(req.headers["x-agentplane-mcp"]);
   console.log(`mcp request for hand ${handActor}`);
   const parentCtx = contextFromHeaders(req.headers);
   await withSpan("broker.mcp", parentCtx, { "agentplane.hand": handActor }, async (reqCtx) => {
-    const server = buildServer(handActor, reqCtx);
+    const server = await buildServer(handActor, upstreams, reqCtx);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => { transport.close?.(); });
     await server.connect(transport);

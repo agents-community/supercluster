@@ -75,20 +75,13 @@ supported). The call is idempotent — the same email always gets the same
 token. Non-allowlisted emails get `403`; if no allowlist is configured the
 endpoint answers `503` and access is operator-managed.
 
-## Credential vault → the hand
+## Credential vault
 
 Users store third-party credentials (e.g. a GitHub PAT) with
-`PUT /v1/credentials/gh-token {"value":"ghp_…"}`; values land in GCP Secret
-Manager, named per user, and are never returned by the API. When a session's
-agent declares `credentials: [gh-token]`, serve mints a short-lived HMAC
-**grant** for the session's hand, and the hand redeems it against
-`GET /v1/hand/credentials/{name}` — pulling the secret straight into actor
-memory (git credentials / env / header form). User tokens cannot call the
-hand-pull route, and grants cannot call anything else.
-
-> The egress-gateway work (`egress/`) supersedes this hand-pull path: the goal
-> state injects credentials at the egress proxy so the sandbox never holds
-> them at all.
+`PUT /v1/credentials/gh-token {"value":"ghp_…","type":"git"}`; values land in GCP
+Secret Manager, named per user, and are never returned by the API — `GET` lists
+names only. An agent references one by name via `credentials: [gh-token]`, and
+serve resolves it per session for that agent.
 
 !!! note "Status probing never wakes a sleeping mind"
     List/get derive `sleeping` from the actor state alone — `/healthz` probes

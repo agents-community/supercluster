@@ -52,7 +52,7 @@ the entire control. Only allow-listed tools are auto-approved; headless, anythin
 else is denied at the permission layer, so an empty `allow` means a chat-only
 agent. The safety boundary is the gVisor sandbox, not tool lists.
 
-### `ask:` — tools that need a human yes (#67)
+### `ask:` — tools that need a human yes
 
 ```yaml
 allow: [WebFetch]
@@ -97,10 +97,10 @@ the hand executes":
 | `WebFetch` | in the brain actor | fetched content enters the model's context without crossing the sandbox that runs commands |
 
 `egress.allowedHosts` does **not** constrain either one today — the field is
-declarative and the enforcing gateway is not deployed (threat model F9). Actors
+declarative and not yet enforced at runtime. Actors
 egress to `0.0.0.0/0` minus RFC1918 and the metadata server, so allowing
 `WebFetch` grants unrestricted outbound fetching rather than fetching limited to
-the listed hosts. The git proxy is the one enforced network path.
+the listed hosts.
 
 ### How the spec reaches the harness
 
@@ -114,7 +114,7 @@ The AgentSpec is vendor-neutral; each in-image adapter translates it. For
 | `model` | `model` | as written |
 | `allow: [X]` | `allowedTools` | X runs without asking |
 | `deny: [X]` | `disallowedTools` | X is removed |
-| `mcp:` | `mcpServers` | federated **through the hand** when there is one (the normal case) — see below |
+| `mcp:` | `mcpServers` | federated **through the broker** (the brain never dials an upstream directly) — see below |
 | — | `permissionMode: "dontAsk"` | always set |
 
 `allowedTools` is, in the SDK's own words, a list of tools "auto-allowed
@@ -125,30 +125,28 @@ nobody to approve it and is denied rather than queued. Worth knowing if you ever
 change the permission mode: `allow` would stop being a boundary the moment
 something could answer a prompt.
 
-> **Subagent caveat.** `deny` is not reliably inherited by subagents — an
-> escrowed transcript shows `Bash` running under an agent that denied it
-> ([threat model F13](threat-model/README.md), upstream
-> [#172](https://github.com/anthropics/claude-agent-sdk-typescript/issues/172)).
-> Harness versions are pinned and `test/smoke-live.sh` asserts the boundary, but
-> do not treat per-subagent tool policy as enforced. gVisor is the boundary that
-> does not depend on it.
+> **Subagent caveat.** `deny` is not reliably inherited by subagents — a
+> subagent can run a tool its parent denied (upstream
+> [claude-agent-sdk #172](https://github.com/anthropics/claude-agent-sdk-typescript/issues/172)).
+> Harness versions are pinned, but do not treat per-subagent tool policy as
+> enforced. The gVisor sandbox is the boundary that does not depend on it.
 
-### Where your `mcp:` servers actually connect
+### Where your `mcp:` servers connect
 
-They always work — but with `hand: true` (the normal case) they are **not**
-connected to the reasoning layer. The brain connects to exactly one MCP server,
-the hand, and your servers are federated *through* it:
+With `hand: true` (the normal case) the brain connects to exactly **one** MCP
+server — the **broker** — and your `mcp:` servers are federated *through* it. The
+brain never opens a connection to an upstream server itself: it holds the model
+key, so all external MCP is mediated by the broker.
 
 ```
-you declare        mcp: {github: {url, headersFrom: {...}}}
-serve, at setup    resolves the credential for THIS user, POSTs the upstream
-                   to the hand's /admin/upstreams
-the hand           connects to github and re-exposes its tools next to its own
-the brain          sees ONE server — the hand
+you declare    mcp: {deepwiki: {url: "https://mcp.deepwiki.com/mcp"}}
+the brain      passes the config to the broker; it never dials the server
+the broker     connects to the server as an MCP client and re-exposes its tools
+               alongside the hand's — the brain sees one server, the broker
 ```
 
-That is the point of the split: **the brain never holds an upstream URL or a
-credential.** Only the hand does, and only for the session it belongs to.
+Scope federated tools with `server/tool` in `allow`/`deny`/`ask`
+(e.g. `allow: [deepwiki/*]`); they reach the model as `mcp__hand__<server>__<tool>`.
 
 The visible consequence is naming. A `create_issue` tool on a `github` upstream
 reaches the model as:
@@ -166,7 +164,7 @@ So two things follow:
 - **Scope federated tools with `server/tool`, not the runtime name.** The spec is
   compiled before any upstream is dialled, so it cannot know that a `github`
   server exposes `create_issue`. serve learns the real names at session setup and
-  translates them (#58):
+  translates them:
 
   ```yaml
   allow: [github/list_issues]     # permitted; github's other tools are denied
@@ -179,10 +177,8 @@ So two things follow:
   disabled.
 
   An entry matching nothing **fails session creation**, naming the bad entries
-  and the servers that did connect. That case used to pass silently and fail
-  *open*: misspell the server (`gihub/list_issues`) and the real `github` was
-  never scoped, so all of its tools stayed permitted while the spec read as a
-  restriction.
+  and the servers that connected — so a misspelled server (`gihub/list_issues`)
+  is caught at create rather than leaving the real `github` unscoped.
 
 Without a hand (`hand: false`), your servers connect straight to the brain and
 the names are `mcp__github__*` — but then the reasoning layer holds the
@@ -196,24 +192,23 @@ credentials: [gh-token]       # vault credentials granted to the session's hand
 ```
 
 With `hand: true` the agent is minted as **two** paired actors: the **brain**
-(the harness, which reasons but executes nothing) and the **[hand](../../hand/)**
-(an MCP tool gateway that owns bash/file tools and federates the user's MCP
-servers). The brain's tool traffic all flows through the hand's one MCP door —
-so tool execution is observable, credential use is attributable, and the
-reasoning process never holds secrets. `credentials:` names entries from the
-user's vault (`PUT /v1/credentials/{name}`) that serve grants to the hand at
-session setup. Hand-role agents are hidden from `GET /v1/agents`.
+(the harness, which reasons but executes nothing) and the **hand** (a gVisor
+sandbox holding the durable `/workspace` and a toolchain). The model's tools run
+in the hand, launched from outside the sandbox by the broker — so tool execution
+is observable, credential use is attributable, and the reasoning process never
+holds secrets. `credentials:` names entries from the user's vault
+(`PUT /v1/credentials/{name}`) that serve grants to the hand at session setup.
+Hand-role agents are hidden from `GET /v1/agents`.
 
-Curated starting points live in [`examples/`](../examples/): `starter.yaml`
-(claude-code, split-agent, git-capable), `codex.yaml`, `pi.yaml`.
+Curated starting points live in
+[`examples/`](https://github.com/agents-community/supercluster/tree/main/agentplane/examples):
+`starter.yaml` (claude-code, split-agent, git-capable), `codex.yaml`, `pi.yaml`.
 
 ## Egress policy & credential injection
 
-> **Declarative today, not yet enforced.** These fields validate and compile
-> onto the template so serve can render a gateway policy per session, but the
-> egress gateway is not deployed ([`egress/`](../../../egress/), threat-model
-> F9) — actor egress is still unrestricted in practice. Declaring a policy
-> documents intent; it does not yet constrain anything.
+> **Declarative, not yet enforced.** These fields validate and compile onto the
+> template, but actor egress is not currently constrained at runtime. Declaring a
+> policy documents intent; it does not yet restrict traffic.
 
 ```yaml
 egress:

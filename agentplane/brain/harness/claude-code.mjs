@@ -42,19 +42,21 @@ export const claudeCode = {
     if (spec.systemPrompt) opts.systemPrompt = spec.systemPrompt;
     if (spec.model) opts.model = spec.model;
 
-    const hu = handURL(); // D3: pair the hand lazily from CURRENT identity
-    // Hand-as-gateway: when paired to a hand, the brain connects to ONE door —
-    // the hand — and the user's own MCP servers are federated THROUGH it (serve
-    // injects them into the hand, with credentials, at session create). So the
-    // brain holds no upstream URLs or credentials; every tool is mcp__hand__*.
-    // Without a hand, connect the user's servers directly from the brain.
-    const mcp = hu ? { hand: { url: hu } } : { ...(spec.mcp || {}) };
-    if (Object.keys(mcp).length > 0) {
-      opts.mcpServers = {};
-      for (const [name, cfg] of Object.entries(mcp)) {
-        opts.mcpServers[name] = { type: "http", url: cfg.url, ...(cfg.headers ? { headers: cfg.headers } : {}) };
-        opts.allowedTools.push(`mcp__${name}__*`);
+    const hu = handURL(); // D3: pair the broker lazily from CURRENT identity
+    // The brain connects to EXACTLY one MCP endpoint — the broker (the hand's
+    // door). It NEVER dials the user's MCP servers directly: the brain holds the
+    // model key, so all external MCP is mediated by the broker. The agent's
+    // `mcp:` upstreams travel to the broker as config (a header); the broker is
+    // the MCP client to them and exposes their tools as mcp__hand__<server>__<tool>.
+    if (hu) {
+      const hand = { type: "http", url: hu };
+      if (spec.mcp && Object.keys(spec.mcp).length) {
+        hand.headers = { "x-agentplane-mcp": Buffer.from(JSON.stringify(spec.mcp)).toString("base64") };
       }
+      opts.mcpServers = { hand };
+      opts.allowedTools.push("mcp__hand__*");
+    } else if (spec.mcp && Object.keys(spec.mcp).length) {
+      console.error("claude-code: spec.mcp needs a broker — the brain does not connect to MCP servers directly; ignoring");
     }
     if (Array.isArray(spec.allow)) opts.allowedTools.push(...spec.allow);
     if (Array.isArray(spec.deny)) opts.disallowedTools.push(...spec.deny);
