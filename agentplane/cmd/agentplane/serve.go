@@ -839,9 +839,13 @@ func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if hm, err := templateHarnesses(r.Context(), s.sc); err == nil {
 		harness = hm[template]
 	}
+	model := ""
+	if mm, err := templateModels(r.Context(), s.sc); err == nil {
+		model = mm[template]
+	}
 	span(r).SetAttributes(attribute.String("agentplane.session", sid), attribute.String("agentplane.agent", in.Agent))
 	s.log.Info("session created", "session", sid, "agent", in.Agent, "harness", harness, "user", userOf(r))
-	writeJSON(w, http.StatusCreated, map[string]string{"id": sid, "agent": in.Agent, "harness": harness})
+	writeJSON(w, http.StatusCreated, map[string]string{"id": sid, "agent": in.Agent, "harness": harness, "model": model})
 }
 
 func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
@@ -853,10 +857,12 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	harnesses, _ := templateHarnesses(r.Context(), s.sc) // best-effort enrich
+	models, _ := templateModels(r.Context(), s.sc)       // best-effort enrich
 	type item struct {
 		ID      string `json:"id"`
 		Agent   string `json:"agent"`
 		Harness string `json:"harness"`
+		Model   string `json:"model"`
 		Status  string `json:"status"`
 	}
 	logicalAgents, _ := templateAgents(r.Context(), s.sc) // best-effort enrich
@@ -874,7 +880,7 @@ func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 			agent = logical
 		}
 		items = append(items, item{ID: sid, Agent: agent, Harness: harnesses[tmplName],
-			Status: derivedStatus(s.sc, name, a.GetStatus().String())})
+			Model: models[tmplName], Status: derivedStatus(s.sc, name, a.GetStatus().String())})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
 }
@@ -890,6 +896,7 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	harnesses, _ := templateHarnesses(r.Context(), s.sc) // best-effort enrich
+	models, _ := templateModels(r.Context(), s.sc)       // best-effort enrich
 	for _, a := range actors {
 		if a.GetMetadata().GetName() != brain {
 			continue
@@ -904,7 +911,7 @@ func (s *server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 				agentName = logical
 			}
 		}
-		out := map[string]any{"id": sid, "agent": agentName, "harness": harnesses[tmplName]}
+		out := map[string]any{"id": sid, "agent": agentName, "harness": harnesses[tmplName], "model": models[tmplName]}
 		// Stored metadata first: it is readable while the mind SLEEPS, which the
 		// live probe below is not (probing resumes a suspended actor, undoing
 		// the auto-sleep that just saved the worker). A sleeping session used to

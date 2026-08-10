@@ -29,6 +29,11 @@ for f in "$root"/infra/serve/*.yaml "$root"/gitproxy/deploy.yaml "$root"/broker/
     networkpolicy.yaml|ingress-tls.yaml) continue ;;
     # not a kubernetes manifest — built with `gcloud builds submit`, see build.sh
     cloudbuild.yaml) continue ;;
+    # the email allowlist holds ACCOUNT-SPECIFIC data (real testers/admins) and
+    # the committed file is only a placeholder template — applying it here would
+    # WIPE the live allowlist. Maintain it out-of-band, e.g.:
+    #   kubectl -n agentplane apply -f your-real-allowed-emails.yaml
+    allowed-emails.configmap.yaml) continue ;;
   esac
   # No separator before the first document: a leading `---` makes an empty one,
   # which kubectl rejects with "apiVersion not set".

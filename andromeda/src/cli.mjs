@@ -197,8 +197,34 @@ async function runAgent(client) {
   fail("usage: andromeda agent create -f <spec.yaml> | get <name> | rm <name> | ls");
 }
 
-// ---- sessions: list, optionally filtered by --agent -----------------------
+// ---- sessions: list, or delete -------------------------------------------
 async function runSessions(client) {
+  const sub = process.argv[3] && !process.argv[3].startsWith("-") ? process.argv[3] : null;
+
+  // `sessions rm <id>` — delete one; `sessions rm --all [--agent X]` — delete many.
+  if (sub === "rm" || sub === "delete") {
+    const id = process.argv[4] && !process.argv[4].startsWith("-") ? process.argv[4] : null;
+    if (id) {
+      await client.deleteSession(id).catch((e) => fail(`delete ${id}: ${e.message}`));
+      console.log(`session ${id} deleted`);
+      process.exit(0);
+    }
+    if (process.argv.includes("--all")) {
+      const filter = arg("agent");
+      let sessions = await client.sessions();
+      if (filter) sessions = sessions.filter((s) => s.agent === filter);
+      if (!sessions.length) { console.log("(no sessions to delete)"); process.exit(0); }
+      for (const s of sessions) {
+        await client.deleteSession(s.id)
+          .then(() => console.log(`session ${s.id} deleted`))
+          .catch((e) => console.error(`session ${s.id}: delete failed — ${e.message}`));
+      }
+      process.exit(0);
+    }
+    fail("usage: andromeda sessions rm <sess-…>   |   sessions rm --all [--agent <name>]");
+  }
+
+  // default: list (optionally filtered by --agent)
   const filter = arg("agent");
   let sessions = await client.sessions();
   if (filter) sessions = sessions.filter((s) => s.agent === filter);
@@ -207,7 +233,7 @@ async function runSessions(client) {
     process.exit(0);
   }
   for (const s of sessions) console.log(`${s.id.padEnd(20)} ${s.agent.padEnd(18)} ${s.harness.padEnd(12)} ${s.status}`);
-  console.log(`\nattach:  andromeda --session <sess-…>`);
+  console.log(`\nattach:  andromeda --session <sess-…>   ·   delete:  andromeda sessions rm <sess-…>`);
   process.exit(0);
 }
 
@@ -281,11 +307,12 @@ if (!token) {
 // Authenticated subcommands (need the client).
 if (positional === "cred") await runCred(client);
 if (positional === "agent") await runAgent(client);
-if (positional === "sessions") await runSessions(client);
+if (positional === "sessions" || positional === "session") await runSessions(client);
 
 let sessionId = arg("session");
 let agentName = arg("agent");
 let harness = "";
+let model = "";
 
 if (!sessionId && !agentName) {
   // No target: show what exists and how to attach, then exit.
@@ -315,6 +342,7 @@ if (!sessionId) {
     sessionId = created.id;
     agentName = agentName || created.agent;
     harness = created.harness || "";
+    model = created.model || "";
   } catch (e) {
     fail(`could not create a session for agent ${agentName}: ${e.message}`);
   }
@@ -326,6 +354,7 @@ if (!harness) {
   try {
     const s = await client.session(sessionId);
     harness = s.harness || "";
+    model = model || s.model || "";
     agentName = agentName || s.agent;
   } catch { /* older serve without a session-detail route */ }
 }
@@ -347,7 +376,7 @@ try {
 // output or a previous attach.
 process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
 
-const instance = render(h(App, { client, sessionId, agentName, harness, initialLines, initialCursor }));
+const instance = render(h(App, { client, sessionId, agentName, harness, model, initialLines, initialCursor }));
 await instance.waitUntilExit();
 console.log(`detached — the mind lives on.
   re-attach:  andromeda --session ${sessionId}`);

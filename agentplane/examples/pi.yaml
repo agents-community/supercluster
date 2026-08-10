@@ -6,6 +6,8 @@
 
 name: pi
 harness: pi
+hand: true                          # tools run in a paired hand actor (h-<id>);
+                                    # required — the executor runs outside gVisor
 
 model: anthropic/claude-haiku-4-5   # or openai/gpt-5, google/gemini-2.5-pro, …
 systemPrompt: >-

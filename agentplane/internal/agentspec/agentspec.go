@@ -640,13 +640,21 @@ func (s *AgentSpec) CompileVersion(namespace, bucket, templateName string, versi
 	if s.Hand {
 		labels["agentplane.io/hand"] = "true" // serve pairs an h-<id> per session
 	}
+	// Model goes in an ANNOTATION, not a label: a pi model like
+	// "anthropic/claude-haiku-4-5" contains '/', which is illegal in a label
+	// value. serve reads it back to report the model on a session.
+	annotations := map[string]string{}
+	if s.Model != "" {
+		annotations["agentplane.io/model"] = s.Model
+	}
 	tmpl := map[string]any{
 		"apiVersion": "ate.dev/v1alpha1",
 		"kind":       "ActorTemplate",
 		"metadata": map[string]any{
-			"name":      templateName,
-			"namespace": namespace,
-			"labels":    labels,
+			"name":        templateName,
+			"namespace":   namespace,
+			"labels":      labels,
+			"annotations": annotations,
 		},
 		"spec": map[string]any{
 			"pauseImage": pauseImage,

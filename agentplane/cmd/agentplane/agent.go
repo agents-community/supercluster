@@ -253,6 +253,25 @@ func templateHarnesses(ctx context.Context, sc sessionCtx) (map[string]string, e
 	return m, nil
 }
 
+// templateModels maps template name -> model, read from the agentplane.io/model
+// annotation (a model can contain '/', so it can't be a label). Empty when an
+// agent declares no model (the harness default applies).
+func templateModels(ctx context.Context, sc sessionCtx) (map[string]string, error) {
+	out, err := runKubectl(ctx, "get", "actortemplates", "-n", sc.templateNS,
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.metadata.annotations.agentplane\.io/model}{"\n"}{end}`)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name, model, _ := strings.Cut(line, " ")
+		if name != "" {
+			m[name] = model
+		}
+	}
+	return m, nil
+}
+
 func templatePhase(ctx context.Context, sc sessionCtx, name string) string {
 	out, err := runKubectl(ctx, "get", "actortemplate", "-n", sc.templateNS,
 		"-o", "jsonpath={.status.phase}", "--", name)

@@ -264,7 +264,7 @@ function StatusPill({ state, elapsed }) {
   return h(Text, { color: C.green }, "● online · it remembers");
 }
 
-export function App({ client, sessionId, agentName, harness, initialLines, initialCursor }) {
+export function App({ client, sessionId, agentName, harness, model, initialLines, initialCursor }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [lines, setLines] = useState(initialLines);
@@ -292,22 +292,18 @@ export function App({ client, sessionId, agentName, harness, initialLines, initi
   // /approve" bug).
   const streamFromCursor = async () => {
     setState("thinking");
-    let buf = "";
-    const setStream = () => setLines((ls) => {
-      const c = ls.slice();
-      if (c.length && c[c.length - 1].kind === "stream") c[c.length - 1] = { kind: "stream", text: buf };
-      else c.push({ kind: "stream", text: buf });
-      return c;
-    });
-    const clearStream = () => setLines((ls) =>
-      ls.length && ls[ls.length - 1].kind === "stream" ? ls.slice(0, -1) : ls);
+    // We deliberately do NOT render token-by-token. Repainting a growing
+    // markdown/code block on every delta makes Ink corrupt the terminal —
+    // flicker, dropped leading characters, overlapping lines. Instead we show
+    // tool calls live and render each assistant message ONCE, complete, when it
+    // arrives. The spinner ("working") is the in-progress feedback.
     try {
       cursor.current = await client.streamTurn(sessionId, cursor.current, (ev) => {
-        if (ev.type === "session.status_running" || ev.type === "user.message") return;
-        if (ev.type === "agent.message_delta") { buf += ev.text || ""; setStream(); return; }
-        if (ev.type === "agent.message") { clearStream(); buf = ""; append(eventToLine(ev)); return; }
-        if (ev.type === "session.status_idle") { clearStream(); buf = ""; return; }
-        append(eventToLine(ev)); // tool_use, error
+        if (ev.type === "agent.message_delta"
+          || ev.type === "session.status_running"
+          || ev.type === "user.message"
+          || ev.type === "session.status_idle") return;
+        append(eventToLine(ev)); // agent.message (complete markdown), agent.tool_use, error
       });
     } catch (e) {
       append({ kind: "error", text: e.message });
@@ -342,21 +338,25 @@ export function App({ client, sessionId, agentName, harness, initialLines, initi
   };
 
   const rows = stdout?.rows ?? 30;
-  const visible = lines.slice(-(Math.max(rows - 9, 4)));
+  const cols = stdout?.columns ?? 80;
+  // Pin the input to the bottom: the transcript flex-grows to fill everything
+  // above it, newest line just above the input (like codex / claude-code). We
+  // render each assistant message ONCE, complete — never token-by-token — so the
+  // transcript repaints only when a whole line arrives (Ink line-diffs it), not
+  // per character. That's what keeps it stable: no flicker, no dropped chars.
+  const viewport = Math.max(rows - 6, 4);
+  const visible = lines.slice(-viewport);
 
-  return h(Box, { flexDirection: "column", height: rows - 1 },
-    // header band
-    h(Box, { justifyContent: "space-between", paddingX: 1 },
-      h(Box, {}, ...grad("✦ ANDROMEDA")),
-      h(StatusPill, { state, elapsed })),
-    h(Box, { paddingX: 1 }, h(Text, { color: C.faint }, "─".repeat(Math.max((stdout?.columns ?? 80) - 2, 10)))),
-
-    // transcript
-    h(Box, { flexDirection: "column", flexGrow: 1, paddingX: 1 },
-      lines.length === 0 ? h(Welcome, { cols: stdout?.columns ?? 80 }) : null,
+  return h(Box, { flexDirection: "column", height: rows },
+    // TRANSCRIPT — fills the space above the input, newest line at the bottom.
+    h(Box, { flexDirection: "column", flexGrow: 1, justifyContent: "flex-end", paddingX: 1 },
+      lines.length === 0 ? h(Welcome, { cols }) : null,
       ...visible.map((line, i) => h(Line, { key: i, line }))),
 
-    // input
+    // in-progress feedback (spinner is the cue while a message is composed)
+    busy ? h(Box, { paddingX: 1 }, h(StatusPill, { state, elapsed })) : null,
+
+    // input — pinned at the bottom
     h(Box, { borderStyle: "round", borderColor: C.magenta, paddingX: 1 },
       h(Text, { color: C.cyan, bold: true }, "› "),
       h(TextInput, { value: input, onChange: setInput, onSubmit: submit, placeholder: "message your durable mind…", focus: !busy })),
@@ -367,6 +367,8 @@ export function App({ client, sessionId, agentName, harness, initialLines, initi
         chip(agentName || "agent", C.blue),
         harness ? h(Text, { key: "hg", color: C.dim }, " on ") : null,
         harness ? chip(harness, C.amber) : null,
+        model ? h(Text, { key: "mg", color: C.dim }, " · ") : null,
+        model ? chip(model, C.green) : null,
         h(Text, { color: C.dim }, ` ${sessionId}`)),
       h(Text, { color: C.dim }, [
         h(Text, { key: "1", color: C.cyan }, "enter"), " send  ",

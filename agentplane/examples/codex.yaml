@@ -8,6 +8,8 @@
 
 name: codex
 harness: codex
+hand: true                          # tools run in a paired hand actor (h-<id>);
+                                    # required — the executor runs outside gVisor
 
 systemPrompt: >-
   You are a concise coding agent. You work in /workspace. Do what is asked,
