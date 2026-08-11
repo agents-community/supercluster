@@ -6,7 +6,6 @@ on:
 
 # CI runs the unit level only. Integration layers run locally:
 #   hand MCP smoke   docker run --rm -v "$PWD/hand":/app -w /app node:22-slim node test/mcp-smoke.mjs
-#   egress proof     ./egress/proof/run.sh
 #   live smoke       AGENTPLANE_URL=... AGENTPLANE_TOKEN=... ./test/smoke-live.sh
 jobs:
   # Go control plane, built against the pinned+patched Substrate checkout.
