@@ -1,0 +1,1278 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable agent minds on checkpointable sandboxes">
+      
+      
+      
+      
+        <link rel="prev" href="../architecture/">
+      
+      
+        <link rel="next" href="../api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>AgentSpec - AgentPlane</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#agents-agentspec-lifecycle" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AgentPlane" class="md-header__button md-logo" aria-label="AgentPlane" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AgentPlane
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              AgentSpec
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/agents-community/supercluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AgentPlane" class="md-nav__button md-logo" aria-label="AgentPlane" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AgentPlane
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/agents-community/supercluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using the API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AgentSpec
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AgentSpec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#agentspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AgentSpec
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#any-model-one-harness-pi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Any model, one harness: pi
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-policy-is-yours" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool policy is yours
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool policy is yours">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ask-tools-that-need-a-human-yes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ask: — tools that need a human yes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webfetch-and-websearch-are-not-sandboxed-by-the-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebFetch and WebSearch are not sandboxed by the hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-spec-reaches-the-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the spec reaches the harness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-your-mcp-servers-connect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where your mcp: servers connect
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#split-agents-brain-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Split agents: brain + hand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#versions-updating-an-agent-never-touches-its-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Versions: updating an agent never touches its sessions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durable-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable workspace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#play-with-it-andromeda-or-chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Play with it: andromeda (or chat)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scripting-it-chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scripting it: chat
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commands-cli-or-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands (CLI or API)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deletion-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deletion semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#agentspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AgentSpec
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#any-model-one-harness-pi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Any model, one harness: pi
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-policy-is-yours" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool policy is yours
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool policy is yours">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ask-tools-that-need-a-human-yes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ask: — tools that need a human yes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webfetch-and-websearch-are-not-sandboxed-by-the-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebFetch and WebSearch are not sandboxed by the hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-spec-reaches-the-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the spec reaches the harness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-your-mcp-servers-connect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where your mcp: servers connect
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#split-agents-brain-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Split agents: brain + hand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#versions-updating-an-agent-never-touches-its-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Versions: updating an agent never touches its sessions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durable-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable workspace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#play-with-it-andromeda-or-chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Play with it: andromeda (or chat)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scripting-it-chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scripting it: chat
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commands-cli-or-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands (CLI or API)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deletion-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deletion semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="agents-agentspec-lifecycle">Agents — AgentSpec &amp; lifecycle</h1>
+<p>An <strong>agent</strong> is a named, immutable definition: harness + behavior config. A
+<strong>session</strong> is a durable mind minted <em>from</em> an agent. Underneath, agent =
+Substrate <code>ActorTemplate</code>, session = actor — but you only ever touch the
+AgentSpec. The brain image is resolved by the platform from the harness, so it
+never appears in a spec.</p>
+<h2 id="agentspec">AgentSpec</h2>
+<div class="highlight"><pre><span></span><code><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tutor</span>
+<span class="nt">harness</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">claude-code</span><span class="w">          </span><span class="c1"># or codex, pi</span>
+<span class="nt">systemPrompt</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">&gt;-</span>
+<span class="w">  </span><span class="no">You are a patient math tutor. Keep answers short.</span>
+<span class="nt">turnDeadlineSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">90</span><span class="w">       </span><span class="c1"># watchdog: max wall-clock per turn</span>
+<span class="c1"># model: claude-sonnet-5</span>
+<span class="c1"># apiKeySecret: my-key-secret # per-agent BYO key (defaults to shared secret)</span>
+<span class="c1"># allow: [&quot;Bash(ls*)&quot;]</span>
+<span class="c1"># deny:  [&quot;WebSearch&quot;]</span>
+<span class="c1"># mcp:</span>
+<span class="c1">#   github: {url: https://…/mcp, headers: {Authorization: &quot;Bearer …&quot;}}</span>
+</code></pre></div>
+<p>Validation is strict where it protects you: names must be DNS-safe and harnesses
+must be known. The spec is translated to each harness's native config by the
+in-image adapter — the file above is vendor-neutral.</p>
+<h2 id="any-model-one-harness-pi">Any model, one harness: pi</h2>
+<p>The <code>pi</code> harness is model-agnostic — <code>model: "provider/model-id"</code> selects the
+vendor per agent, and the compiler wires the matching key automatically:</p>
+<table>
+<thead>
+<tr>
+<th><code>model:</code> prefix</th>
+<th>Key env</th>
+<th>Default secret</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>anthropic/…</code> (default)</td>
+<td><code>ANTHROPIC_API_KEY</code></td>
+<td><code>anthropic-api-key</code></td>
+</tr>
+<tr>
+<td><code>openai/…</code></td>
+<td><code>OPENAI_API_KEY</code></td>
+<td><code>openai-api-key</code></td>
+</tr>
+<tr>
+<td><code>google/…</code></td>
+<td><code>GEMINI_API_KEY</code></td>
+<td><code>gemini-api-key</code></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="nt">harness</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pi</span>
+<span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">google/gemini-2.5-pro</span><span class="w">    </span><span class="c1"># switch vendors by editing ONE line</span>
+</code></pre></div>
+<p>Configure keys with <code>agentplane configure -provider anthropic|openai|google</code>.
+Other providers: set <code>apiKeySecret</code> explicitly (pi itself supports many more).</p>
+<h2 id="tool-policy-is-yours">Tool policy is yours</h2>
+<p>The platform imposes <strong>no</strong> tool policy — <code>allow</code>/<code>deny</code>/<code>ask</code> in the spec is
+the entire control. Only allow-listed tools are auto-approved; headless, anything
+else is denied at the permission layer, so an empty <code>allow</code> means a chat-only
+agent. The safety boundary is the gVisor sandbox, not tool lists.</p>
+<h3 id="ask-tools-that-need-a-human-yes"><code>ask:</code> — tools that need a human yes</h3>
+<div class="highlight"><pre><span></span><code><span class="nt">allow</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">WebFetch</span><span class="p p-Indicator">]</span>
+<span class="nt">ask</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">[</span><span class="nv">Bash</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">github/create_issue</span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># same vocabulary as allow/deny</span>
+<span class="nt">deny</span><span class="p">:</span><span class="w">  </span><span class="p p-Indicator">[</span><span class="nv">Write</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">Edit</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p><code>ask</code> <strong>gates</strong> a tool; it does not grant one. A gated call is denied with a
+reason the model reads, a <code>tool.approval_requested</code> event is emitted, and the
+turn <strong>ends cleanly</strong> — the actor suspends, and waiting costs nothing.</p>
+<div class="highlight"><pre><span></span><code>andromeda    →  /approvals, then /approve &lt;id&gt; or /deny &lt;id&gt;
+</code></pre></div>
+<p>Approving queues an input, so the agent retries the call it was blocked on
+rather than sitting idle until you happen to send a message.</p>
+<p>Three properties worth knowing:</p>
+<ul>
+<li><strong>Per call, not per tool.</strong> The request id hashes the tool <em>and its input</em>, so
+  approving <code>rm -rf build</code> does not approve <code>rm -rf /</code>.</li>
+<li><strong>Single use.</strong> A grant is spent when the tool runs, and the spend is
+  recorded, so a restart cannot resurrect it.</li>
+<li><strong>Durable.</strong> Requests and answers are events, so they survive suspend, harness
+  restart and a cold rebuild — the runtime folds the log at startup.</li>
+</ul>
+<p>Implemented as a <code>PreToolUse</code> hook rather than <code>canUseTool</code>. Awaiting a human
+inside <code>canUseTool</code> would hold the turn open until the watchdog killed it, and
+under <code>permissionMode: "dontAsk"</code> the SDK short-circuits denials — the SDK
+documents that PreToolUse denies bypass <code>canUseTool</code>, so it is the hook that
+reliably runs in a headless session.</p>
+<h3 id="webfetch-and-websearch-are-not-sandboxed-by-the-hand"><code>WebFetch</code> and <code>WebSearch</code> are not sandboxed by the hand</h3>
+<p>Both are reasoning-layer tools, so they are the exception to "the mind decides,
+the hand executes":</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Runs</th>
+<th>Consequence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WebSearch</code></td>
+<td>at the model provider</td>
+<td>results arrive in the response; if the provider or region does not offer it, allowing it does nothing</td>
+</tr>
+<tr>
+<td><code>WebFetch</code></td>
+<td>in the brain actor</td>
+<td>fetched content enters the model's context without crossing the sandbox that runs commands</td>
+</tr>
+</tbody>
+</table>
+<p>Actors have unrestricted outbound network access (<code>0.0.0.0/0</code> minus RFC1918 and
+the metadata server), so <code>WebFetch</code> can reach any host.</p>
+<h3 id="how-the-spec-reaches-the-harness">How the spec reaches the harness</h3>
+<p>The AgentSpec is vendor-neutral; each in-image adapter translates it. For
+<code>claude-code</code> the mapping is direct
+(<code>agentplane/brain/harness/claude-code.mjs</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Spec</th>
+<th>Agent SDK option</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>systemPrompt</code></td>
+<td><code>systemPrompt</code></td>
+<td>as written</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td><code>model</code></td>
+<td>as written</td>
+</tr>
+<tr>
+<td><code>allow: [X]</code></td>
+<td><code>allowedTools</code></td>
+<td>X runs without asking</td>
+</tr>
+<tr>
+<td><code>deny: [X]</code></td>
+<td><code>disallowedTools</code></td>
+<td>X is removed</td>
+</tr>
+<tr>
+<td><code>mcp:</code></td>
+<td><code>mcpServers</code></td>
+<td>federated <strong>through the broker</strong> (the brain never dials an upstream directly) — see below</td>
+</tr>
+<tr>
+<td>—</td>
+<td><code>permissionMode: "dontAsk"</code></td>
+<td>always set</td>
+</tr>
+</tbody>
+</table>
+<p><code>allowedTools</code> is, in the SDK's own words, a list of tools "auto-allowed
+<strong>without prompting</strong>" rather than a restriction — it directs you to the <code>tools</code>
+option to restrict. It nevertheless behaves as an allow-list here, because
+<code>permissionMode: "dontAsk"</code> in a headless session means an unlisted tool has
+nobody to approve it and is denied rather than queued. Worth knowing if you ever
+change the permission mode: <code>allow</code> would stop being a boundary the moment
+something could answer a prompt.</p>
+<blockquote>
+<p><strong>Subagent caveat.</strong> <code>deny</code> is not reliably inherited by subagents — a
+subagent can run a tool its parent denied (upstream
+<a href="https://github.com/anthropics/claude-agent-sdk-typescript/issues/172">claude-agent-sdk #172</a>).
+Harness versions are pinned, but do not treat per-subagent tool policy as
+enforced. The gVisor sandbox is the boundary that does not depend on it.</p>
+</blockquote>
+<h3 id="where-your-mcp-servers-connect">Where your <code>mcp:</code> servers connect</h3>
+<p>With <code>hand: true</code> (the normal case) the brain connects to exactly <strong>one</strong> MCP
+server — the <strong>broker</strong> — and your <code>mcp:</code> servers are federated <em>through</em> it. The
+brain never opens a connection to an upstream server itself: it holds the model
+key, so all external MCP is mediated by the broker.</p>
+<div class="highlight"><pre><span></span><code>you declare    mcp: {deepwiki: {url: &quot;https://mcp.deepwiki.com/mcp&quot;}}
+the brain      passes the config to the broker; it never dials the server
+the broker     connects to the server as an MCP client and re-exposes its tools
+               alongside the hand&#39;s — the brain sees one server, the broker
+</code></pre></div>
+<p>Scope federated tools with <code>server/tool</code> in <code>allow</code>/<code>deny</code>/<code>ask</code>
+(e.g. <code>allow: [deepwiki/*]</code>); they reach the model as <code>mcp__hand__&lt;server&gt;__&lt;tool&gt;</code>.</p>
+<p>The visible consequence is naming. A <code>create_issue</code> tool on a <code>github</code> upstream
+reaches the model as:</p>
+<div class="highlight"><pre><span></span><code>mcp__hand__github__create_issue      ← what you get
+mcp__github__create_issue            ← what you might expect
+</code></pre></div>
+<p>So two things follow:</p>
+<ul>
+<li><strong><code>allow: [mcp__github__*]</code> matches nothing.</strong> The hand's own entry
+  (<code>mcp__hand__*</code>) is added to <code>allowedTools</code> automatically, which covers every
+  federated tool too.</li>
+<li><strong>Scope federated tools with <code>server/tool</code>, not the runtime name.</strong> The spec is
+  compiled before any upstream is dialled, so it cannot know that a <code>github</code>
+  server exposes <code>create_issue</code>. serve learns the real names at session setup and
+  translates them:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="nt">allow</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">github/list_issues</span><span class="p p-Indicator">]</span><span class="w">     </span><span class="c1"># permitted; github&#39;s other tools are denied</span>
+<span class="nt">allow</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">github/*</span><span class="p p-Indicator">]</span><span class="w">               </span><span class="c1"># the whole server</span>
+</code></pre></div>
+<p>Naming any tool of a server turns that server into an allow-list. A server
+  nobody names is untouched, so this is inert for specs that do not use it.
+  Resolution emits <strong>denials only</strong> — it can never grant a tool the operator
+  disabled.</p>
+<p>An entry matching nothing <strong>fails session creation</strong>, naming the bad entries
+  and the servers that connected — so a misspelled server (<code>gihub/list_issues</code>)
+  is caught at create rather than leaving the real <code>github</code> unscoped.</p>
+<p>Without a hand (<code>hand: false</code>), your servers connect straight to the brain and
+the names are <code>mcp__github__*</code> — but then the reasoning layer holds the
+credentials, which is what the split exists to avoid.</p>
+<h2 id="split-agents-brain-hand">Split agents: brain + hand</h2>
+<div class="highlight"><pre><span></span><code><span class="nt">hand</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                    </span><span class="c1"># split the agent: reasoning ≠ execution</span>
+<span class="nt">credentials</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">gh-token</span><span class="p p-Indicator">]</span><span class="w">       </span><span class="c1"># vault credentials granted to the session&#39;s hand</span>
+</code></pre></div>
+<p>With <code>hand: true</code> the agent is minted as <strong>two</strong> paired actors: the <strong>brain</strong>
+(the harness, which reasons but executes nothing) and the <strong>hand</strong> (a gVisor
+sandbox holding the durable <code>/workspace</code> and a toolchain). The model's tools run
+in the hand, launched from outside the sandbox by the broker — so tool execution
+is observable, credential use is attributable, and the reasoning process never
+holds secrets. <code>credentials:</code> names entries from the user's vault
+(<code>PUT /v1/credentials/{name}</code>) that serve grants to the hand at session setup.
+Hand-role agents are hidden from <code>GET /v1/agents</code>.</p>
+<p>Curated starting points live in
+<a href="https://github.com/agents-community/supercluster/tree/main/agentplane/examples"><code>examples/</code></a>:
+<code>starter.yaml</code> (claude-code, split-agent, git-capable), <code>codex.yaml</code>, <code>pi.yaml</code>.</p>
+<h2 id="versions-updating-an-agent-never-touches-its-sessions">Versions: updating an agent never touches its sessions</h2>
+<p><code>ActorTemplate.spec</code> is immutable in Substrate, so a changed agent is a <strong>new
+version compiled to a new template</strong> — and the old templates stay put:</p>
+<div class="highlight"><pre><span></span><code>agentplane<span class="w"> </span>agent<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>tutor.yaml<span class="w">     </span><span class="c1"># v1</span>
+<span class="c1"># edit the system prompt…</span>
+agentplane<span class="w"> </span>agent<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>tutor.yaml<span class="w">     </span><span class="c1"># v2 — sessions on v1 keep running</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>POST /v1/agents            re-posting an existing name mints the next version
+GET  /v1/agents/{n}/versions   history, newest first, with each spec
+POST /v1/sessions {&quot;agent&quot;:&quot;tutor&quot;}              → latest version
+POST /v1/sessions {&quot;agent&quot;:&quot;tutor&quot;,&quot;version&quot;:1}  → that exact definition
+</code></pre></div>
+<p>Sessions <strong>pin</strong> the version they were minted from, so a running mind keeps
+answering on the template it started with. Before this, the only way to change
+an agent was <code>DELETE ?cascade=true</code> + recreate, which destroyed every session
+it owned — editing a prompt killed every durable mind using it.</p>
+<p>Versions are append-only: a version document is written once and never
+rewritten, so <strong>rollback is a new version</strong> whose spec is copied from an older
+one, and the history stays auditable. Deleting the agent removes every version
+(and refuses, without <code>?cascade=true</code>, while any version still has sessions).</p>
+<p>Version 1 keeps the bare agent name; later versions are <code>agent-vN</code>. An agent
+may therefore not be <em>named</em> like a versioned template — <code>foo-v2</code> is rejected,
+since it would collide with version 2 of <code>foo</code>.</p>
+<p>Requires <code>AGENTPLANE_PROJECT</code> (Firestore). Without it, agent creation keeps its
+original create-once behavior and re-posting a name still returns <code>409</code>.</p>
+<h2 id="durable-workspace">Durable workspace</h2>
+<div class="highlight"><pre><span></span><code><span class="nt">workspace</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">durable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<p>Mounts <code>/workspace</code> as a Substrate <strong>DurableDir</strong> volume: repos and build
+artifacts persist across suspend/resume as <em>filesystem</em> data, kept out of the
+memory image. Use it for agents that hold checkouts or build state — the
+memory snapshot stays lean while the workspace survives independently.</p>
+<h2 id="play-with-it-andromeda-or-chat">Play with it: <code>andromeda</code> (or <code>chat</code>)</h2>
+<p>The distributable TUI — hand someone a URL + token and they're chatting with
+a durable mind on your cluster:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>andromeda<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w">        </span><span class="c1"># (until it&#39;s published to npm)</span>
+<span class="nv">ANDROMEDA_URL</span><span class="o">=</span>http://localhost:7433<span class="w"> </span><span class="nv">ANDROMEDA_TOKEN</span><span class="o">=</span>…<span class="w"> </span>node<span class="w"> </span>src/cli.mjs<span class="w"> </span>--agent<span class="w"> </span>buddy
+</code></pre></div>
+<p>Enter sends, <strong>Ctrl+S suspends the mind in place</strong>, Esc detaches — and
+re-attaching (<code>--session sess-…</code>) replays history and continues where you
+left off, even across checkpoints.</p>
+<h2 id="scripting-it-chat">Scripting it: <code>chat</code></h2>
+<p>The interactive front door — create an agent, then chat like any CLI agent,
+except <strong>detaching never loses the mind</strong>:</p>
+<div class="highlight"><pre><span></span><code>agentplane<span class="w"> </span>agent<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>my-agent.yaml
+agentplane<span class="w"> </span>chat<span class="w"> </span>-agent<span class="w"> </span>my-agent<span class="w">          </span><span class="c1"># mints a session, drops into a REPL</span>
+<span class="c1"># … talk, watch tool activity stream, Ctrl-D to detach …</span>
+agentplane<span class="w"> </span>chat<span class="w"> </span>-id<span class="w"> </span>sess-…<span class="w">               </span><span class="c1"># tomorrow: same mind, full history</span>
+</code></pre></div>
+<p>In the REPL: <code>/suspend</code> freezes the mind in place, <code>/quit</code> detaches. A send to
+a sleeping mind auto-wakes it (~1–2s) — chat shows "(waking the mind…)" while
+the checkpoint thaws.</p>
+<h2 id="commands-cli-or-api">Commands (CLI or API)</h2>
+<p>Everything below is also available over HTTP (<code>agentplane serve</code>):
+<code>POST /v1/agents</code> with the spec as the body, <code>DELETE /v1/agents/{id}[?cascade=true]</code>
+— same validation, same cascade guard. See <a href="../api/">Control-plane API</a>.</p>
+<div class="highlight"><pre><span></span><code>agentplane<span class="w"> </span>agent<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>tutor.yaml<span class="w">   </span><span class="c1"># compile → apply → bake golden (~30s)</span>
+agentplane<span class="w"> </span>agent<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>tutor.yaml<span class="w"> </span>-print<span class="w">   </span><span class="c1"># inspect the compiled template</span>
+agentplane<span class="w"> </span>agent<span class="w"> </span>list<span class="w">                   </span><span class="c1"># AGENT / HARNESS / PHASE / SESSIONS</span>
+agentplane<span class="w"> </span>session<span class="w"> </span>new<span class="w"> </span>-agent<span class="w"> </span>tutor<span class="w">     </span><span class="c1"># mint a mind from this agent</span>
+agentplane<span class="w"> </span>agent<span class="w"> </span>delete<span class="w"> </span>-name<span class="w"> </span>tutor<span class="w">     </span><span class="c1"># refuses while sessions live</span>
+agentplane<span class="w"> </span>agent<span class="w"> </span>delete<span class="w"> </span>-name<span class="w"> </span>tutor<span class="w"> </span>-cascade<span class="w">   </span><span class="c1"># escrow + delete sessions first</span>
+</code></pre></div>
+<h2 id="deletion-semantics">Deletion semantics</h2>
+<p>Deleting a template while its sessions live makes them <strong>unresumable</strong> — so:</p>
+<ol>
+<li><code>agent delete</code> <strong>refuses</strong> when sessions exist, listing them.</li>
+<li><code>-cascade</code> destroys sessions first, escrow-first: each transcript is written
+   to <code>gs://$AGENTPLANE_BUCKET/transcripts/&lt;sid&gt;/</code> <strong>before</strong> anything dies.</li>
+<li>Only then does the template (and its golden) go.</li>
+</ol>
+<p>Re-creating an agent with the same name later is safe — even with a different
+image, previously-suspended sessions restore from their own snapshots with
+memory intact.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
