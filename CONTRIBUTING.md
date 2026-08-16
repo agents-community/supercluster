@@ -23,7 +23,6 @@
 | Control plane / runtime / API | [`agentplane/CONTRIBUTING.md`](agentplane/CONTRIBUTING.md) |
 | TUI | [`andromeda/CONTRIBUTING.md`](andromeda/CONTRIBUTING.md) |
 | Hand (MCP tool gateway) | [`hand/README.md`](hand/README.md) |
-| Egress gateway | [`egress/README.md`](egress/README.md) |
 | Deploy + Substrate patches | [`infra/README.md`](infra/README.md), [`infra/substrate-patches/README.md`](infra/substrate-patches/README.md) |
 
 ## Substrate dependency

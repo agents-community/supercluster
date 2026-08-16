@@ -19,8 +19,8 @@ systemPrompt: >-
   concise in chat and do the real work with your tools.
 deny: [Bash, Write, Edit, Read, Grep, Glob, NotebookEdit]
 turnDeadlineSeconds: 600
-# Egress policy — declarative today (the gateway isn't deployed yet; see
-# egress/ and threat-model F9). Documents where this agent may talk.
+# Egress policy — declarative only (not enforced at runtime yet). Documents
+# where this agent may talk.
 egress:
   mode: limited
   allowedHosts: [github.com, api.github.com]

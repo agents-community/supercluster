@@ -134,6 +134,6 @@ spec:
         - 169.254.169.254/32              # …and no GCP metadata server (token theft)
         # NOTE: 169.254.20.10 (node-local DNS) is allowed by the explicit rule
         # above; it must stay reachable or every actor loses name resolution.
-# NOTE: the internet rule is what the egress gateway (egress/, F9) replaces —
-# once actor traffic is forced through the proxy, this becomes "to the gateway
-# only" and destination allowlisting moves there.
+# NOTE: the internet rule stays until per-destination egress enforcement exists;
+# with an egress proxy in place this would narrow to the proxy only, and
+# destination allowlisting would move there.

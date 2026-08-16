@@ -44,7 +44,6 @@ are its stars.
 | **[`andromeda/`](andromeda/)** | The terminal you actually live in — a rich TUI (markdown, streaming, syntax highlighting) for chatting with durable minds. | Ink, zero-build — `npx @agentsupercluster/andromeda` |
 | **[`hand/`](hand/)** | The agent's hand — an MCP tool gateway in the sandbox: bash/file tools + federation of the user's own MCP servers. The brain talks to one door. | Node · MCP streamable HTTP |
 | **[`gitproxy/`](gitproxy/)** | Attaches your git credential **outside** the sandbox, so a repository token never enters an actor — and so a checkpoint cannot capture it. | Go · distroless |
-| **[`egress/`](egress/)** | The general secretless-egress design for arbitrary hosts. Proof only; `gitproxy/` is the shipped subset. | mitmproxy proof → Substrate atunnel |
 | **[`infra/`](infra/)** | Deploy manifests, network policy, and versioned [Substrate patches](infra/substrate-patches/). Every account-specific value lives in one `config.env`; [`BOOTSTRAP.md`](infra/BOOTSTRAP.md) stands the whole thing up in a fresh GCP project. | k8s · GCP |
 
 Galaxies never share code across language boundaries — the contract between
