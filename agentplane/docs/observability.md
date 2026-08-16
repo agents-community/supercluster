@@ -69,8 +69,8 @@ Then each agent exports:
   - `claude_code.cost.usage` (USD), `claude_code.session.count`, `claude_code.active_time.total`
 - **Traces** (enhanced beta) — a **`claude_code.llm_request` span per model call**
   under a `claude_code.interaction`, so you see each Anthropic API round-trip and
-  its latency. These land as a separate `claude-code` service in Jaeger (not yet
-  stitched into the `agentplane-serve` waterfall — correlate by time/session).
+  its latency. These land as a separate `claude-code` service in Jaeger; correlate
+  with the `agentplane-serve` waterfall by time/session.
 
 ```promql
 # cost per model, last hour
@@ -125,9 +125,3 @@ harness spawn on top.
 No cluster access for the viewer? Query the Jaeger API from any in-cluster pod:
 `curl -s 'http://jaeger.otel-system.svc:16686/api/traces?service=claude-code&limit=5&lookback=30m'`.
 
-## Deeper breakdown (planned)
-
-`wake_latency` is measured at "mind accepts the message." To split
-queue-wait vs restore vs **first-token**, add brain-side metrics (the brain
-already timestamps `user.message → status_running → agent.message`, so the
-split is derivable) — a future addition, kept out of the images until needed.
