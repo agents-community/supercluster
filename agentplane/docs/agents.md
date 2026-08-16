@@ -10,7 +10,7 @@ never appears in a spec.
 
 ```yaml
 name: tutor
-harness: claude-code          # or codex, pi (opencode: planned)
+harness: claude-code          # or codex, pi
 systemPrompt: >-
   You are a patient math tutor. Keep answers short.
 turnDeadlineSeconds: 90       # watchdog: max wall-clock per turn
@@ -96,11 +96,8 @@ the hand executes":
 | `WebSearch` | at the model provider | results arrive in the response; if the provider or region does not offer it, allowing it does nothing |
 | `WebFetch` | in the brain actor | fetched content enters the model's context without crossing the sandbox that runs commands |
 
-`egress.allowedHosts` does **not** constrain either one today — the field is
-declarative and not yet enforced at runtime. Actors
-egress to `0.0.0.0/0` minus RFC1918 and the metadata server, so allowing
-`WebFetch` grants unrestricted outbound fetching rather than fetching limited to
-the listed hosts.
+Actors have unrestricted outbound network access (`0.0.0.0/0` minus RFC1918 and
+the metadata server), so `WebFetch` can reach any host.
 
 ### How the spec reaches the harness
 
@@ -204,46 +201,6 @@ Curated starting points live in
 [`examples/`](https://github.com/agents-community/supercluster/tree/main/agentplane/examples):
 `starter.yaml` (claude-code, split-agent, git-capable), `codex.yaml`, `pi.yaml`.
 
-## Egress policy & credential injection
-
-> **Declarative, not yet enforced.** These fields validate and compile onto the
-> template, but actor egress is not currently constrained at runtime. Declaring a
-> policy documents intent; it does not yet restrict traffic.
-
-```yaml
-egress:
-  mode: limited                 # unrestricted (default) | limited
-  allowedHosts: [github.com, api.github.com]
-credentials:
-  - name: gh-token
-    inject:
-      hosts: [github.com]       # which destinations receive the secret
-      location: {header: true}  # header and/or body — never the URL path
-```
-
-`credentials: [gh-token]` (a bare name) still works and means "no injection" —
-the legacy path where the hand pulls the value into actor memory.
-
-**Reachability and credential scope are separate.** `egress.allowedHosts` says
-which destinations are reachable; `inject.hosts` says which receive the
-secret. A host must be in **both** — being reachable never implies being
-trusted with a credential, and injecting into a host outside the allowlist is
-rejected at create rather than silently doing nothing.
-
-Three limits worth knowing before you write a policy:
-
-- **The URL path is never injected.** Path-secret endpoints (Slack incoming
-  webhooks) can't be used this way — prefer header auth.
-- **`location` should stay header-only unless you need otherwise.** Request
-  bodies are assembled from content the agent is working with, so body
-  injection is the wider exposure surface.
-- **Clients that validate key format locally will break** once injection is
-  live: they see an opaque placeholder, not a real key, and can fail before
-  making any network call.
-
-Hosts are plain hostnames — a scheme, port, or path is rejected, since those
-are the usual ways an allowlist entry looks right and matches nothing.
-
 ## Versions: updating an agent never touches its sessions
 
 `ActorTemplate.spec` is immutable in Substrate, so a changed agent is a **new
@@ -336,7 +293,7 @@ agentplane agent delete -name tutor     # refuses while sessions live
 agentplane agent delete -name tutor -cascade   # escrow + delete sessions first
 ```
 
-## Deletion semantics (verified, not aspirational)
+## Deletion semantics
 
 Deleting a template while its sessions live makes them **unresumable** — so:
 
